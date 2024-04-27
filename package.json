@@ -1,6 +1,9 @@
 {
   "name": "@amadeus-it-group/tansu",
   "type": "module",
+  "dependencies": {
+    "signal-polyfill": "^0.1.0"
+  },
   "devDependencies": {
     "@angular/common": "^17.1.0",
     "@angular/compiler": "^17.1.0",

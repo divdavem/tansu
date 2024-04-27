@@ -144,6 +144,14 @@ describe('stores', () => {
       ]);
     });
 
+    it('should work to use subscribe only', () => {
+      const store1 = writable(0);
+      const store2 = asReadable({ subscribe: store1.subscribe });
+      expect(store2()).toBe(0);
+      store1.set(1);
+      expect(store2()).toBe(1);
+    });
+
     it('should allow overriding notEqual', () => {
       const notEqualCalls: [number, number][] = [];
       class ModuloStore extends Store<number> {
@@ -424,34 +432,6 @@ describe('stores', () => {
       });
       expect(calls).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
       expect(get(store)).toEqual(10);
-      unsubscribe();
-    });
-
-    it('should not call again listeners when only resuming subscribers', () => {
-      class BasicStore extends Store<object> {
-        public override pauseSubscribers(): void {
-          super.pauseSubscribers();
-        }
-        public override resumeSubscribers(): void {
-          super.resumeSubscribers();
-        }
-        public override set(value: object): void {
-          super.set(value);
-        }
-      }
-      const initialValue = {};
-      const newValue = {};
-      const store = new BasicStore(initialValue);
-      const calls: object[] = [];
-      const unsubscribe = store.subscribe((v) => calls.push(v));
-      expect(calls.length).toBe(1);
-      expect(calls[0]).toBe(initialValue);
-      store.pauseSubscribers();
-      store.resumeSubscribers();
-      expect(calls.length).toBe(1);
-      store.set(newValue);
-      expect(calls.length).toBe(2);
-      expect(calls[1]).toBe(newValue);
       unsubscribe();
     });
 
@@ -2941,7 +2921,7 @@ describe('stores', () => {
       const values: number[] = [];
       expect(() => {
         myValue.subscribe((value) => values.push(value));
-      }).toThrowError('recursive computed');
+      }).toThrowError('Detected cycle in computations.');
       expect(values).toEqual([]);
     });
 
@@ -2953,7 +2933,7 @@ describe('stores', () => {
       expect(values).toEqual([0]);
       expect(() => {
         recursive.set(true);
-      }).toThrowError('recursive computed');
+      }).toThrowError('Detected cycle in computations.');
     });
 
     it('should throw when changing a value from computed would result in an infinite loop (on subscribe)', () => {

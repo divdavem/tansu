@@ -14,5 +14,6 @@ export default [
     ],
     input: './src/index.ts',
     plugins: [typescript()],
+    external: ['signal-polyfill'],
   },
 ];

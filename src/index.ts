@@ -42,6 +42,7 @@ const unplanListener = (listener: () => void) => {
 };
 
 const returnFalse = () => false;
+const returnTrue = () => true;
 const normalizedSubscribe = new WeakSet();
 const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
   const createSubscription = () => {
@@ -57,21 +58,22 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
       },
       { equals: returnFalse }
     );
-    const notifyListener = () => {
-      // check if the value of the signal has changed:
-      hasChanged = false;
-      const wasPaused = paused;
-      const value = computedSignal.get();
-      paused = false;
-      watcher.watch();
-      if (hasChanged) {
-        // the value really changed
-        next(value);
-      } else if (wasPaused) {
-        // the value did not change
-        resume();
-      }
-    };
+    const notifyListener = () =>
+      Signal.subtle.untrack(() => {
+        // check if the value of the signal has changed:
+        hasChanged = false;
+        const wasPaused = paused;
+        const value = computedSignal.get();
+        paused = false;
+        watcher.watch();
+        if (hasChanged) {
+          // the value really changed
+          next(value);
+        } else if (wasPaused) {
+          // the value did not change
+          resume();
+        }
+      });
     const watcher = new Signal.subtle.Watcher(() => {
       if (paused) {
         console.log('ASSERT ERROR: paused was expected to be false in watcher callback');
@@ -117,6 +119,7 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
     return res;
   };
 
+  // const findOldSubscription = (ref: any) => null;
   const res = (subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject =>
     (findOldSubscription((subscriber as any)?.[oldSubscription]) || createSubscription())(
       subscriber
@@ -125,43 +128,51 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
   return res;
 };
 
-const createSignalFromSubscribableStore = <T>(store: SubscribableStore<T>) => {
+const onUseLogic = (onUseFn: () => Unsubscriber | void) => {
   let counter = 0;
-  let unsubscribe: UnsubscribeFunction | undefined;
+  let cleanupFn: UnsubscribeFunction | null;
+  const startUse = () => {
+    if (++counter === 1) {
+      cleanupFn = untrack(() => normalizeUnsubscribe(onUseFn()));
+    }
+  };
+  const endUse = () => {
+    if (--counter === 0) {
+      const fn = cleanupFn;
+      cleanupFn = null;
+      untrack(() => fn?.());
+    }
+  };
+  const wrapCall = <T>(fn: () => T): T => {
+    try {
+      startUse();
+      return fn();
+    } finally {
+      endUse();
+    }
+  };
+  return { startUse, endUse, wrapCall };
+};
+
+const createSignalFromSubscribableStore = <T>(store: SubscribableStore<T>) => {
   const subscriber: SubscriberFunction<T> & Partial<SubscriberObject<T>> = (value: T) => {
     signal.set(value);
   };
   subscriber.next = subscriber;
-  const counterIncrease = () => {
-    counter++;
-    if (counter === 1) {
-      unsubscribe = normalizeUnsubscribe(store.subscribe(subscriber));
-    } else {
-      (unsubscribe as any)?.[triggerUpdate]?.();
-    }
-  };
-  const counterDecrease = () => {
-    counter--;
-    if (counter === 0) {
-      const fn = unsubscribe;
-      unsubscribe = undefined;
-      (subscriber as any)[oldSubscription] = fn;
-      fn?.();
-    }
-  };
+
+  const { startUse, endUse, wrapCall } = onUseLogic(() => {
+    const unsubscribe = normalizeUnsubscribe(store.subscribe(subscriber));
+    return () => {
+      unsubscribe();
+      (subscriber as any)[oldSubscription] = unsubscribe;
+    };
+  });
   const signal = new Signal.State(undefined as T, {
     equals: returnFalse,
-    [Signal.subtle.watched]: counterIncrease,
-    [Signal.subtle.unwatched]: counterDecrease,
+    [Signal.subtle.watched]: startUse,
+    [Signal.subtle.unwatched]: endUse,
   });
-  return () => {
-    try {
-      counterIncrease();
-      return signal.get();
-    } finally {
-      counterDecrease();
-    }
-  };
+  return () => wrapCall(() => signal.get());
 };
 
 const toSignalFnCache = new Map<StoreInput<any>, () => any>();
@@ -577,7 +588,7 @@ export const batch = <T>(fn: () => T): T => {
  */
 export const get = <T>(store: StoreInput<T>): T => toSignalFn(store)();
 
-const skipEqualInSet = Symbol();
+const skipEqual = Symbol();
 
 /**
  * Default implementation of the equal function used by tansu when a store
@@ -624,56 +635,30 @@ export const equal = <T>(a: T, b: T): boolean =>
  * ```
  */
 export abstract class Store<T> implements Readable<T> {
-  #useCount = 0;
-  #cleanupFn: null | UnsubscribeFunction = null;
-  #signal: Signal.State<T>;
+  protected readonly _onUseLogic = onUseLogic(() => this.onUse());
+  protected readonly signal: Signal.State<T>;
+  [skipEqual] = false;
 
   /**
    *
    * @param value - Initial value of the store
    */
   constructor(value: T) {
-    this.#signal = new Signal.State(value, {
-      equals: (a, b) => this.equal(a, b),
-      [Signal.subtle.watched]: () => this.#useIncrement(),
-      [Signal.subtle.unwatched]: () => this.#useDecrement(),
+    this.signal = new Signal.State(value, {
+      equals: (a, b) => {
+        if (this[skipEqual]) {
+          return false;
+        }
+        return this.equal(a, b);
+      },
+      [Signal.subtle.watched]: this._onUseLogic.startUse,
+      [Signal.subtle.unwatched]: this._onUseLogic.endUse,
     });
     this.subscribe = createSubscribeFromSignal(this);
   }
 
-  #useIncrement() {
-    this.#useCount++;
-    if (this.#useCount === 1) {
-      this.#start();
-    }
-  }
-
-  #useDecrement() {
-    this.#useCount--;
-    if (this.#useCount === 0) {
-      this.#stop();
-    }
-  }
-
-  #start() {
-    this.#cleanupFn = normalizeUnsubscribe(this.onUse());
-  }
-
-  #stop() {
-    const cleanupFn = this.#cleanupFn;
-    if (cleanupFn) {
-      this.#cleanupFn = null;
-      cleanupFn();
-    }
-  }
-
   get(): T {
-    try {
-      this.#useIncrement();
-      return this.#signal.get();
-    } finally {
-      this.#useDecrement();
-    }
+    return this._onUseLogic.wrapCall(() => this.signal.get());
   }
 
   /**
@@ -727,7 +712,7 @@ export abstract class Store<T> implements Readable<T> {
    */
   protected set(value: T): void {
     batch(() => {
-      this.#signal.set(value);
+      this.signal.set(value);
     });
   }
 
@@ -738,7 +723,7 @@ export abstract class Store<T> implements Readable<T> {
    * @param updater - a function that takes the current state as an argument and returns the new state.
    */
   protected update(updater: Updater<T>): void {
-    this.set(updater(untrack(() => this.#signal.get())));
+    this.set(updater(untrack(() => this.signal.get())));
   }
 
   /**
@@ -1012,10 +997,8 @@ function isSyncDeriveFn<T, S>(fn: DeriveFn<T, S>): fn is SyncDeriveFn<T, S> {
   return fn.length <= 1;
 }
 
-const callFn = (fn: () => void) => fn();
-
 export abstract class DerivedStore<T, S extends StoresInput = StoresInput> extends Store<T> {
-  readonly #argComputed;
+  readonly #computedSignal: Signal.Computed<T>;
 
   // computed for the function param
   // with as many stores and an extra one
@@ -1023,101 +1006,43 @@ export abstract class DerivedStore<T, S extends StoresInput = StoresInput> exten
     super(initialValue);
     const isArray = Array.isArray(stores);
     const storesSignalFn = (isArray ? [...stores] : [stores]).map(toSignalFn);
-    this.#argComputed = new Signal.Computed(
+    const derivedArg = new Signal.Computed(
       isArray ? () => storesSignalFn.map((fn) => fn()) : () => storesSignalFn[0](),
       { equals: returnFalse }
     );
-  }
-  /*
-  protected override resumeSubscribers(): void {
-    if (!this.#pending) {
-      // only resume subscribers if we know that the values of the stores with which
-      // the derived function was called were the correct ones
-      super.resumeSubscribers();
-    }
-  }
-
-  protected override onUse(): Unsubscriber | void {
-    let initDone = false;
-    let changed = 0;
-
-    const isArray = this.#isArray;
-    const storesSubscribeFn = this.#storesSubscribeFn;
-    const dependantValues = new Array(storesSubscribeFn.length);
-
     let cleanupFn: null | UnsubscribeFunction = null;
-
     const callCleanup = () => {
-      const fn = cleanupFn;
-      if (fn) {
-        cleanupFn = null;
-        fn();
-      }
+      const previousCleanup = cleanupFn;
+      cleanupFn = null;
+      previousCleanup?.();
     };
-
-    const callDerive = (setInitDone = false) => {
-      if (setInitDone) {
-        initDone = true;
-      }
-      if (initDone && !this.#pending) {
-        if (changed) {
-          changed = 0;
+    const callDerived = new Signal.Computed(
+      () => {
+        const derivedArgValue = derivedArg.get();
+        Signal.subtle.untrack(() => {
           callCleanup();
-          cleanupFn = normalizeUnsubscribe(
-            this.derive(isArray ? dependantValues : dependantValues[0])
-          );
-        }
-        this.resumeSubscribers();
+          cleanupFn = normalizeUnsubscribe(this.derive(derivedArgValue as any));
+        });
+      },
+      {
+        equals: returnTrue,
+        [Signal.subtle.watched]: () => {},
+        [Signal.subtle.unwatched]: callCleanup,
       }
-    };
-
-    const unsubscribers = storesSubscribeFn.map((subscribe, idx) => {
-      const subscriber = (v: any) => {
-        dependantValues[idx] = v;
-        changed |= 1 << idx;
-        this.#pending &= ~(1 << idx);
-        callDerive();
-      };
-      subscriber.next = subscriber;
-      subscriber.pause = () => {
-        this.#pending |= 1 << idx;
-        this.pauseSubscribers();
-      };
-      subscriber.resume = () => {
-        this.#pending &= ~(1 << idx);
-        callDerive();
-      };
-      return subscribe(subscriber);
-    });
-
-    const triggerSubscriberPendingUpdate = (unsubscriber: any, idx: number) => {
-      if (this.#pending & (1 << idx)) {
-        unsubscriber[triggerUpdate]?.();
-      }
-    };
-    this[triggerUpdate] = () => {
-      let iterations = 0;
-      while (this.#pending) {
-        checkIterations(++iterations);
-        initDone = false;
-        unsubscribers.forEach(triggerSubscriberPendingUpdate);
-        if (this.#pending) {
-          // safety check: if pending is not 0 after calling triggerUpdate,
-          // it will never be and this is an endless loop
-          break;
-        }
-        callDerive(true);
-      }
-    };
-    callDerive(true);
-    this[triggerUpdate]();
-    return () => {
-      this[triggerUpdate] = noop;
-      callCleanup();
-      unsubscribers.forEach(callFn);
-    };
+    );
+    this.#computedSignal = new Signal.Computed(
+      () => {
+        callDerived.get();
+        return this.signal.get();
+      },
+      { equals: returnFalse }
+    );
   }
-*/
+
+  override get(): T {
+    return this._onUseLogic.wrapCall(() => this.#computedSignal.get());
+  }
+
   protected abstract derive(values: StoresInputValues<S>): Unsubscriber | void;
 }
 
@@ -1188,11 +1113,11 @@ export function derived<T, S extends StoresInput>(
     ? class extends DerivedStore<T, S> {
         constructor(stores: S, initialValue: T) {
           super(stores, initialValue);
-          // this[skipEqualInSet] = true; // skip call to equal in set until the first value is set
+          this[skipEqual] = true; // skip call to equal until the first value is set
         }
         protected override derive(values: StoresInputValues<S>) {
           this.set(derive(values));
-          // this[skipEqualInSet] = false;
+          this[skipEqual] = false;
         }
       }
     : class extends DerivedStore<T, S> {

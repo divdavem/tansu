@@ -44,10 +44,10 @@ const unplanListener = (listener: () => void) => {
 const returnFalse = () => false;
 const normalizedSubscribe = new WeakSet();
 const createSubscribeFromSignal = <T>(signal: Signal.State<T> | Signal.Computed<T>) => {
-  const res = (subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject => {
-    let next = typeof subscriber === 'function' ? subscriber : bind(subscriber, 'next');
-    let pause = bind(subscriber, 'pause');
-    let resume = bind(subscriber, 'resume');
+  const createSubscription = () => {
+    let next: (value: T) => void;
+    let pause: () => void;
+    let resume: () => void;
     let paused = false;
     let hasChanged = false;
     const computedSignal = new Signal.Computed(
@@ -82,21 +82,88 @@ const createSubscribeFromSignal = <T>(signal: Signal.State<T> | Signal.Computed<
         planListener(notifyListener);
       }
     });
-    watcher.watch(computedSignal);
-    const unsubscribe: UnsubscribeFunction & UnsubscribeObject = () => {
-      next = noop;
-      pause = noop;
-      resume = noop;
-      watcher.unwatch(computedSignal);
-      unplanListener(notifyListener);
+    const subscription = (subscriber: Subscriber<T>) => {
+      let active = true;
+      next = typeof subscriber === 'function' ? subscriber : bind(subscriber, 'next');
+      pause = bind(subscriber, 'pause');
+      resume = bind(subscriber, 'resume');
+      watcher.watch(computedSignal);
+      notifyListener();
+
+      const unsubscribe: UnsubscribeFunction & UnsubscribeObject = () => {
+        if (active) {
+          active = false;
+          next = noop;
+          pause = noop;
+          resume = noop;
+          oldSubscriptionsMap.set(unsubscribe, subscription);
+          watcher.unwatch(computedSignal);
+          unplanListener(notifyListener);
+        }
+      };
+      unsubscribe.unsubscribe = unsubscribe;
+      (unsubscribe as any)[triggerUpdate] = notifyListener;
+      return unsubscribe;
     };
-    unsubscribe.unsubscribe = unsubscribe;
-    (unsubscribe as any)[triggerUpdate] = notifyListener;
-    notifyListener();
-    return unsubscribe;
+    return subscription;
   };
+
+  const oldSubscriptionsMap = new WeakMap<any, ReturnType<typeof createSubscription>>();
+  const findOldSubscription = (ref: any) => {
+    const res = oldSubscriptionsMap.get(ref);
+    if (res) {
+      oldSubscriptionsMap.delete(ref);
+    }
+    return res;
+  };
+
+  const res = (subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject =>
+    (findOldSubscription((subscriber as any)?.[oldSubscription]) || createSubscription())(
+      subscriber
+    );
   normalizedSubscribe.add(res);
   return res;
+};
+
+const createSignalFromSubscribableStore = <T>(store: SubscribableStore<T>) => {
+  let counter = 0;
+  let unsubscribe: UnsubscribeFunction | undefined;
+  const subscriber: SubscriberFunction<T> & SubscriberObject<T> = (value: T) => {
+    signal.set(value);
+  };
+  subscriber.next = subscriber;
+  subscriber.resume = noop;
+  subscriber.pause = noop;
+  const counterIncrease = () => {
+    counter++;
+    if (counter === 1) {
+      unsubscribe = normalizeUnsubscribe(store.subscribe(subscriber));
+    } else {
+      (unsubscribe as any)?.[triggerUpdate]?.();
+    }
+  };
+  const counterDecrease = () => {
+    counter--;
+    if (counter === 0) {
+      const fn = unsubscribe;
+      unsubscribe = undefined;
+      (subscriber as any)[oldSubscription] = fn;
+      fn?.();
+    }
+  };
+  const signal = new Signal.State(undefined as T, {
+    equals: returnFalse,
+    [Signal.subtle.watched]: counterIncrease,
+    [Signal.subtle.unwatched]: counterDecrease,
+  });
+  return () => {
+    try {
+      counterIncrease();
+      return signal.get();
+    } finally {
+      counterDecrease();
+    }
+  };
 };
 
 /**
@@ -104,6 +171,8 @@ const createSubscribeFromSignal = <T>(signal: Signal.State<T> | Signal.Computed<
  */
 export const symbolObservable: typeof Symbol.observable =
   (typeof Symbol === 'function' && Symbol.observable) || ('@@observable' as any);
+
+const oldSubscription = Symbol();
 
 /**
  * A callback invoked when a store value changes. It is called with the latest value of a given store.
@@ -181,6 +250,13 @@ export interface SubscribableStore<T> {
 }
 
 /**
+ * Represents a store whose value can be retrieved with a get function that tracks its usage as specified in the Signal proposal specification.
+ */
+export interface SignalStore<T> {
+  get(): T;
+}
+
+/**
  * An interface for interoperability between observable implementations. It only has to expose the `[Symbol.observable]` method that is supposed to return a subscribable store.
  */
 export interface InteropObservable<T> {
@@ -190,14 +266,16 @@ export interface InteropObservable<T> {
 /**
  * Valid types that can be considered as a store.
  */
-export type StoreInput<T> = SubscribableStore<T> | InteropObservable<T>;
+export type StoreInput<T> = /*SignalStore<T> |*/ SubscribableStore<T> | InteropObservable<T>;
 
 /**
  * This interface augments the base {@link SubscribableStore} interface by requiring the return value of the subscribe method to be both a function and an object with the `unsubscribe` method.
  *
  * For {@link https://rxjs.dev/api/index/interface/InteropObservable | interoperability with rxjs}, it also implements the `[Symbol.observable]` method.
  */
-export interface Readable<T> extends SubscribableStore<T>, InteropObservable<T> {
+export interface Readable<T>
+  extends /*SignalStore<T>,*/ SubscribableStore<T>,
+    InteropObservable<T> {
   subscribe(subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject;
   [Symbol.observable](): Readable<T>;
 }
@@ -478,10 +556,9 @@ export const batch = <T>(fn: () => T): T => {
  * ```
  */
 export const get = <T>(store: StoreInput<T>): T => {
-  const currentComputed = Signal.subtle.currentComputed();
-  if (currentComputed) {
-    // TODO: make sure there is a signal behind the store
-  }
+  /*if ('get' in store) {
+    return store.get();
+  }*/
   return getValue(getNormalizedSubscribe(store));
 };
 
@@ -532,6 +609,7 @@ export const equal = <T>(a: T, b: T): boolean =>
  * ```
  */
 export abstract class Store<T> implements Readable<T> {
+  #useCount = 0;
   #cleanupFn: null | UnsubscribeFunction = null;
   #signal: Signal.State<T>;
 
@@ -542,10 +620,24 @@ export abstract class Store<T> implements Readable<T> {
   constructor(value: T) {
     this.#signal = new Signal.State(value, {
       equals: (a, b) => this.equal(a, b),
-      [Signal.subtle.watched]: () => this.#start(),
-      [Signal.subtle.unwatched]: () => this.#stop(),
+      [Signal.subtle.watched]: () => this.#useIncrement(),
+      [Signal.subtle.unwatched]: () => this.#useDecrement(),
     });
     this.subscribe = createSubscribeFromSignal(this.#signal);
+  }
+
+  #useIncrement() {
+    this.#useCount++;
+    if (this.#useCount === 1) {
+      this.#start();
+    }
+  }
+
+  #useDecrement() {
+    this.#useCount--;
+    if (this.#useCount === 0) {
+      this.#stop();
+    }
   }
 
   #start() {
@@ -557,6 +649,15 @@ export abstract class Store<T> implements Readable<T> {
     if (cleanupFn) {
       this.#cleanupFn = null;
       cleanupFn();
+    }
+  }
+
+  get(): T {
+    try {
+      this.#useIncrement();
+      return this.#signal.get();
+    } finally {
+      this.#useDecrement();
     }
   }
 
@@ -900,6 +1001,8 @@ export abstract class DerivedStore<T, S extends StoresInput = StoresInput> exten
   readonly #storesSubscribeFn: Readable<any>['subscribe'][];
   #pending = 0;
 
+  // computed for the function param
+  // with as many stores and an extra one
   constructor(stores: S, initialValue: T) {
     super(initialValue);
     const isArray = Array.isArray(stores);

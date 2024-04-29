@@ -42,59 +42,61 @@ const unplanListener = (listener: () => void) => {
 };
 
 const returnFalse = () => false;
-const subscribe = <T>(
-  subscriber: Subscriber<T>,
-  signal: Signal.State<T> | Signal.Computed<T>
-): UnsubscribeFunction & UnsubscribeObject => {
-  let next = typeof subscriber === 'function' ? subscriber : bind(subscriber, 'next');
-  let pause = bind(subscriber, 'pause');
-  let resume = bind(subscriber, 'resume');
-  let paused = false;
-  let hasChanged = false;
-  const computedSignal = new Signal.Computed(
-    () => {
-      hasChanged = true;
-      return signal.get();
-    },
-    { equals: returnFalse }
-  );
-  const notifyListener = () => {
-    // check if the value of the signal has changed:
-    hasChanged = false;
-    const wasPaused = paused;
-    const value = computedSignal.get();
-    paused = false;
-    watcher.watch();
-    if (hasChanged) {
-      // the value really changed
-      next(value);
-    } else if (wasPaused) {
-      // the value did not change
-      resume();
-    }
+const normalizedSubscribe = new WeakSet();
+const createSubscribeFromSignal = <T>(signal: Signal.State<T> | Signal.Computed<T>) => {
+  const res = (subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject => {
+    let next = typeof subscriber === 'function' ? subscriber : bind(subscriber, 'next');
+    let pause = bind(subscriber, 'pause');
+    let resume = bind(subscriber, 'resume');
+    let paused = false;
+    let hasChanged = false;
+    const computedSignal = new Signal.Computed(
+      () => {
+        hasChanged = true;
+        return signal.get();
+      },
+      { equals: returnFalse }
+    );
+    const notifyListener = () => {
+      // check if the value of the signal has changed:
+      hasChanged = false;
+      const wasPaused = paused;
+      const value = computedSignal.get();
+      paused = false;
+      watcher.watch();
+      if (hasChanged) {
+        // the value really changed
+        next(value);
+      } else if (wasPaused) {
+        // the value did not change
+        resume();
+      }
+    };
+    const watcher = new Signal.subtle.Watcher(() => {
+      if (paused) {
+        console.log('ASSERT ERROR: paused was expected to be false in watcher callback');
+      }
+      if (!paused) {
+        paused = true;
+        pause();
+        planListener(notifyListener);
+      }
+    });
+    watcher.watch(computedSignal);
+    const unsubscribe: UnsubscribeFunction & UnsubscribeObject = () => {
+      next = noop;
+      pause = noop;
+      resume = noop;
+      watcher.unwatch(computedSignal);
+      unplanListener(notifyListener);
+    };
+    unsubscribe.unsubscribe = unsubscribe;
+    (unsubscribe as any)[triggerUpdate] = notifyListener;
+    notifyListener();
+    return unsubscribe;
   };
-  const watcher = new Signal.subtle.Watcher(() => {
-    if (paused) {
-      console.log('ASSERT ERROR: paused was expected to be false in watcher callback');
-    }
-    if (!paused) {
-      paused = true;
-      pause();
-      planListener(notifyListener);
-    }
-  });
-  watcher.watch(computedSignal);
-  const unsubscribe: UnsubscribeFunction & UnsubscribeObject = () => {
-    next = noop;
-    pause = noop;
-    resume = noop;
-    watcher.unwatch(computedSignal);
-    unplanListener(notifyListener);
-  };
-  unsubscribe.unsubscribe = unsubscribe;
-  (unsubscribe as any)[triggerUpdate] = notifyListener;
-  notifyListener();
-  return unsubscribe;
+  normalizedSubscribe.add(res);
+  return res;
 };
 
 /**
@@ -277,7 +279,6 @@ const normalizeUnsubscribe = (
   return res;
 };
 
-const normalizedSubscribe = new WeakSet<Readable<any>['subscribe']>();
 const normalizeSubscribe = <T>(store: SubscribableStore<T>): Readable<T>['subscribe'] => {
   let res: Readable<T>['subscribe'] = store.subscribe as any;
   if (!normalizedSubscribe.has(res)) {
@@ -464,8 +465,6 @@ export const batch = <T>(fn: () => T): T => {
   }
 };
 
-const defaultReactiveContext = <T>(store: StoreInput<T>) => getValue(getNormalizedSubscribe(store));
-
 /**
  * A utility function to get the current value from a given store.
  * It works by subscribing to a store, capturing the value (synchronously) and unsubscribing just after.
@@ -478,7 +477,13 @@ const defaultReactiveContext = <T>(store: StoreInput<T>) => getValue(getNormaliz
  * console.log(get(myStore)); // logs 1
  * ```
  */
-export const get = <T>(store: StoreInput<T>): T => defaultReactiveContext(store);
+export const get = <T>(store: StoreInput<T>): T => {
+  const currentComputed = Signal.subtle.currentComputed();
+  if (currentComputed) {
+    // TODO: make sure there is a signal behind the store
+  }
+  return getValue(getNormalizedSubscribe(store));
+};
 
 const skipEqualInSet = Symbol();
 
@@ -540,6 +545,7 @@ export abstract class Store<T> implements Readable<T> {
       [Signal.subtle.watched]: () => this.#start(),
       [Signal.subtle.unwatched]: () => this.#stop(),
     });
+    this.subscribe = createSubscribeFromSignal(this.#signal);
   }
 
   #start() {
@@ -650,7 +656,7 @@ export abstract class Store<T> implements Readable<T> {
    * @param subscriber - see {@link SubscribableStore.subscribe}
    */
   subscribe(subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject {
-    return subscribe(subscriber, this.#signal);
+    throw new Error('Not meant to be called this way');
   }
 
   [symbolObservable](): this {
@@ -1126,6 +1132,6 @@ export function computed<T>(
         : equal,
   });
   return asReadable({
-    subscribe: (subscriber) => subscribe(subscriber, signal),
+    subscribe: createSubscribeFromSignal(signal),
   });
 }

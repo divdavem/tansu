@@ -128,12 +128,10 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
 const createSignalFromSubscribableStore = <T>(store: SubscribableStore<T>) => {
   let counter = 0;
   let unsubscribe: UnsubscribeFunction | undefined;
-  const subscriber: SubscriberFunction<T> & SubscriberObject<T> = (value: T) => {
+  const subscriber: SubscriberFunction<T> & Partial<SubscriberObject<T>> = (value: T) => {
     signal.set(value);
   };
   subscriber.next = subscriber;
-  subscriber.resume = noop;
-  subscriber.pause = noop;
   const counterIncrease = () => {
     counter++;
     if (counter === 1) {
@@ -164,6 +162,37 @@ const createSignalFromSubscribableStore = <T>(store: SubscribableStore<T>) => {
       counterDecrease();
     }
   };
+};
+
+const toSignalFnCache = new Map<StoreInput<any>, () => any>();
+const toSignalFn = <T>(store: StoreInput<T>): (() => T) => {
+  if (typeof store === 'function') {
+    return () => store();
+  } else if ('get' in store) {
+    return () => store.get();
+  }
+  const subscribable = 'subscribe' in store ? store : store[symbolObservable]();
+  let res = toSignalFnCache.get(subscribable);
+  if (!res) {
+    res = createSignalFromSubscribableStore(subscribable);
+    toSignalFnCache.set(subscribable, res);
+  }
+  return res;
+};
+
+const toSubscribeCache = new Map();
+const toSubscribe = <T>(store: StoreInput<T>): Readable<T>['subscribe'] => {
+  if ('subscribe' in store) {
+    return normalizeSubscribe(store);
+  } else if (symbolObservable in store) {
+    return normalizeSubscribe(store[symbolObservable]());
+  }
+  let res = toSubscribeCache.get(store);
+  if (!res) {
+    res = createSubscribeFromSignal(typeof store === 'function' ? { get: store } : store);
+    toSubscribeCache.set(store, res);
+  }
+  return res;
 };
 
 /**
@@ -266,16 +295,18 @@ export interface InteropObservable<T> {
 /**
  * Valid types that can be considered as a store.
  */
-export type StoreInput<T> = /*SignalStore<T> |*/ SubscribableStore<T> | InteropObservable<T>;
+export type StoreInput<T> =
+  | (() => T)
+  | SignalStore<T>
+  | SubscribableStore<T>
+  | InteropObservable<T>;
 
 /**
  * This interface augments the base {@link SubscribableStore} interface by requiring the return value of the subscribe method to be both a function and an object with the `unsubscribe` method.
  *
  * For {@link https://rxjs.dev/api/index/interface/InteropObservable | interoperability with rxjs}, it also implements the `[Symbol.observable]` method.
  */
-export interface Readable<T>
-  extends /*SignalStore<T>,*/ SubscribableStore<T>,
-    InteropObservable<T> {
+export interface Readable<T> extends SignalStore<T>, SubscribableStore<T>, InteropObservable<T> {
   subscribe(subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject;
   [Symbol.observable](): Readable<T>;
 }
@@ -366,17 +397,6 @@ const normalizeSubscribe = <T>(store: SubscribableStore<T>): Readable<T>['subscr
   return res;
 };
 
-const getNormalizedSubscribe = <T>(input: StoreInput<T>) => {
-  const store = 'subscribe' in input ? input : input[symbolObservable]();
-  return normalizeSubscribe(store);
-};
-
-const getValue = <T>(subscribe: Readable<T>['subscribe']): T => {
-  let value: T;
-  subscribe((v) => (value = v))();
-  return value!;
-};
-
 /**
  * Returns a wrapper (for the given store) which only exposes the {@link ReadableSignal} interface.
  * This converts any {@link StoreInput} to a {@link ReadableSignal} and exposes the store as read-only.
@@ -401,12 +421,12 @@ export function asReadable<T, U>(
   store: StoreInput<T>,
   extraProp?: U
 ): ReadableSignal<T> & Omit<U, keyof Readable<T>> {
-  const subscribe = getNormalizedSubscribe(store);
-  const res = Object.assign(() => get(res), extraProp, {
-    subscribe,
+  const storeGetter = toSignalFn(store);
+  return Object.assign(() => storeGetter(), extraProp, {
+    get: () => storeGetter(),
+    subscribe: toSubscribe(store),
     [symbolObservable]: returnThis,
   });
-  return res;
 }
 
 const defaultUpdate: any = function <T, U>(this: Writable<T, U>, updater: Updater<T, U>) {
@@ -555,12 +575,7 @@ export const batch = <T>(fn: () => T): T => {
  * console.log(get(myStore)); // logs 1
  * ```
  */
-export const get = <T>(store: StoreInput<T>): T => {
-  /*if ('get' in store) {
-    return store.get();
-  }*/
-  return getValue(getNormalizedSubscribe(store));
-};
+export const get = <T>(store: StoreInput<T>): T => toSignalFn(store)();
 
 const skipEqualInSet = Symbol();
 
@@ -845,8 +860,11 @@ function constStore<T>(value: T): ReadableSignal<T> {
     next(value);
     return noopUnsubscribe;
   };
-  normalizedSubscribe.add(subscribe);
-  return Object.assign(() => value, { subscribe, [symbolObservable]: returnThis });
+  return Object.assign(() => value, {
+    subscribe,
+    get: () => value,
+    [symbolObservable]: returnThis,
+  });
 }
 
 class WritableStore<T> extends Store<T> implements Writable<T> {
@@ -997,17 +1015,18 @@ function isSyncDeriveFn<T, S>(fn: DeriveFn<T, S>): fn is SyncDeriveFn<T, S> {
 const callFn = (fn: () => void) => fn();
 
 export abstract class DerivedStore<T, S extends StoresInput = StoresInput> extends Store<T> {
-  readonly #isArray: boolean;
-  readonly #storesSubscribeFn: Readable<any>['subscribe'][];
-  #pending = 0;
+  readonly #argComputed;
 
   // computed for the function param
   // with as many stores and an extra one
   constructor(stores: S, initialValue: T) {
     super(initialValue);
     const isArray = Array.isArray(stores);
-    this.#isArray = isArray;
-    this.#storesSubscribeFn = (isArray ? [...stores] : [stores]).map(getNormalizedSubscribe);
+    const storesSignalFn = (isArray ? [...stores] : [stores]).map(toSignalFn);
+    this.#argComputed = new Signal.Computed(
+      isArray ? () => storesSignalFn.map((fn) => fn()) : () => storesSignalFn[0](),
+      { equals: returnFalse }
+    );
   }
   /*
   protected override resumeSubscribers(): void {

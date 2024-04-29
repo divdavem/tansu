@@ -43,7 +43,7 @@ const unplanListener = (listener: () => void) => {
 
 const returnFalse = () => false;
 const normalizedSubscribe = new WeakSet();
-const createSubscribeFromSignal = <T>(signal: Signal.State<T> | Signal.Computed<T>) => {
+const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
   const createSubscription = () => {
     let next: (value: T) => void;
     let pause: () => void;
@@ -53,7 +53,7 @@ const createSubscribeFromSignal = <T>(signal: Signal.State<T> | Signal.Computed<
     const computedSignal = new Signal.Computed(
       () => {
         hasChanged = true;
-        return signal.get();
+        return store.get();
       },
       { equals: returnFalse }
     );
@@ -623,7 +623,7 @@ export abstract class Store<T> implements Readable<T> {
       [Signal.subtle.watched]: () => this.#useIncrement(),
       [Signal.subtle.unwatched]: () => this.#useDecrement(),
     });
-    this.subscribe = createSubscribeFromSignal(this.#signal);
+    this.subscribe = createSubscribeFromSignal(this);
   }
 
   #useIncrement() {

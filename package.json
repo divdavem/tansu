@@ -2,7 +2,7 @@
   "name": "@amadeus-it-group/tansu",
   "type": "module",
   "dependencies": {
-    "signal-polyfill": "^0.1.0"
+    "signal-polyfill": "divdavem/signal-polyfill#0b3ef8419b82f67f6aad85f956144063e16466d2"
   },
   "devDependencies": {
     "@angular/common": "^17.3.6",

@@ -58,16 +58,11 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
       },
       { equals: returnFalse }
     );
-    const notifyListener = (first = false) =>
+    const notifyListener = () =>
       untrack(() => {
         // check if the value of the signal has changed:
         hasChanged = false;
         const wasPaused = paused;
-        if (first) {
-          watcher.watch(computedSignal);
-        } else {
-          watcher.watch();
-        }
         const value = computedSignal.get();
         paused = false;
         if (hasChanged) {
@@ -79,6 +74,7 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
         }
       });
     const watcher = new Signal.subtle.Watcher(() => {
+      watcher.watch(); // re-enable watch
       if (paused) {
         console.log('ASSERT ERROR: paused was expected to be false in watcher callback');
       }
@@ -93,7 +89,8 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
       next = typeof subscriber === 'function' ? subscriber : bind(subscriber, 'next');
       pause = bind(subscriber, 'pause');
       resume = bind(subscriber, 'resume');
-      notifyListener(true);
+      watcher.watch(computedSignal);
+      notifyListener();
 
       const unsubscribe: UnsubscribeFunction & UnsubscribeObject = () => {
         if (active) {

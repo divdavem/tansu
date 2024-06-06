@@ -373,11 +373,8 @@ const unplanNotifyStore = (storeNotifier: () => void) => {
 const returnFalse = () => false;
 const returnTrue = () => true;
 const normalizedSubscribe = new WeakSet();
-const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
+const createSubscribeFromSignal = <T>(store: Signal.State<T> | Signal.Computed<T>) => {
   let changeNotification = false;
-  const signalToWatch = new Signal.Computed(() => {
-    store.get();
-  });
   const watcher = new Signal.subtle.Watcher(() => {
     changeNotification = true;
     unplanNotifyStore(storeNotifier);
@@ -412,7 +409,6 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
   };
   const notifySubscriber = (subscriber: PrivateSubscriberObject<T>) =>
     untrack(() => {
-      signalToWatch.get();
       const { changed, value } = subscriber._changeChecker();
       const wasPaused = subscriber._paused;
       subscriber._paused = false;
@@ -439,7 +435,7 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
     );
     subscribers.add(subscriberObject);
     if (subscribers.size === 1) {
-      watcher.watch(signalToWatch);
+      watcher.watch(store);
     }
     notifySubscriber(subscriberObject);
     const unsubscribe = () => {
@@ -450,7 +446,7 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
       if (removed) {
         oldSubscriptionsMap.set(unsubscribe, subscriberObject._changeChecker);
         if (subscribers.size === 0) {
-          watcher.unwatch(signalToWatch);
+          watcher.unwatch(store);
           unplanNotifyStore(storeNotifier);
         }
       }
@@ -536,7 +532,9 @@ const toSubscribe = <T>(store: StoreInput<T>): Readable<T>['subscribe'] => {
   }
   let res = toSubscribeCache.get(store);
   if (!res) {
-    res = createSubscribeFromSignal(typeof store === 'function' ? { get: store } : store);
+    const storeFn = toSignalFn(store);
+    // FIXME: check if it is ok to create a computed here!!
+    res = createSubscribeFromSignal(new Signal.Computed(() => storeFn(), { equals: returnFalse }));
     toSubscribeCache.set(store, res);
   }
   return res;
@@ -696,7 +694,7 @@ export abstract class Store<T> implements Readable<T> {
    */
   constructor(value: T) {
     this._signal = this._createSignal(value);
-    this.subscribe = createSubscribeFromSignal(this);
+    this.subscribe = createSubscribeFromSignal(this._signal);
   }
 
   // FIXME: should we avoid exposing this with a private symbol?
@@ -1098,6 +1096,8 @@ export abstract class DerivedStore<T, S extends StoresInput = StoresInput> exten
         },
       }
     );
+    // FIXME: avoid assigning subscribe twice (both in parent class Store and here)
+    this.subscribe = createSubscribeFromSignal(this.#computedSignal);
   }
 
   protected override _createSignal(value: T): Signal.State<T> {

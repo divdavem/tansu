@@ -13,6 +13,307 @@ declare global {
 
 import { Signal } from 'signal-polyfill';
 
+/**
+ * Symbol used in {@link InteropObservable} allowing any object to expose an observable.
+ */
+export const symbolObservable: typeof Symbol.observable =
+  (typeof Symbol === 'function' && Symbol.observable) || ('@@observable' as any);
+
+const oldSubscription = Symbol();
+
+/**
+ * A callback invoked when a store value changes. It is called with the latest value of a given store.
+ */
+export type SubscriberFunction<T> = ((value: T) => void) &
+  Partial<Omit<SubscriberObject<T>, 'next'>>;
+
+/**
+ * A partial {@link https://github.com/tc39/proposal-observable#api | observer} notified when a store value changes. A store will call the {@link SubscriberObject.next | next} method every time the store's state is changing.
+ */
+export interface SubscriberObject<T> {
+  /**
+   * A store will call this method every time the store's state is changing.
+   */
+  next: SubscriberFunction<T>;
+  /**
+   * Unused, only declared for compatibility with rxjs.
+   */
+  error?: any;
+  /**
+   * Unused, only declared for compatibility with rxjs.
+   */
+  complete?: any;
+  /**
+   * A store will call this method when it knows that the value will be changed.
+   * A call to this method will be followed by a call to {@link SubscriberObject.next | next} or to {@link SubscriberObject.resume | resume}.
+   */
+  pause: () => void;
+  /**
+   * A store will call this method if {@link SubscriberObject.pause | pause} was called previously
+   * and the value finally did not need to change.
+   */
+  resume: () => void;
+  /**
+   * @internal
+   * Value returned from a previous call to subscribe, and corresponding to a subscription to resume.
+   * This subscription must no longer be active. The new subscriber will not be called synchronously if
+   * the value did not change compared to the last value received in this old subscription.
+   */
+  [oldSubscription]?: Unsubscriber;
+}
+
+interface PrivateSubscriberObject<T> extends Omit<SubscriberObject<T>, typeof oldSubscription> {
+  _paused: boolean;
+}
+
+/**
+ * Expresses interest in store value changes over time. It can be either:
+ * - a callback function: {@link SubscriberFunction};
+ * - a partial observer: {@link SubscriberObject}.
+ */
+export type Subscriber<T> = SubscriberFunction<T> | Partial<SubscriberObject<T>> | null | undefined;
+
+/**
+ * A function to unsubscribe from value change notifications.
+ */
+export type UnsubscribeFunction = () => void;
+
+/**
+ * An object with the `unsubscribe` method.
+ * Subscribable stores might choose to return such object instead of directly returning {@link UnsubscribeFunction} from a subscription call.
+ */
+export interface UnsubscribeObject {
+  /**
+   * A method that acts as the {@link UnsubscribeFunction}.
+   */
+  unsubscribe: UnsubscribeFunction;
+}
+
+export type Unsubscriber = UnsubscribeObject | UnsubscribeFunction;
+
+/**
+ * Represents a store accepting registrations (subscribers) and "pushing" notifications on each and every store value change.
+ */
+export interface SubscribableStore<T> {
+  /**
+   * A method that makes it possible to register "interest" in store value changes over time.
+   * It is called each and every time the store's value changes.
+   *
+   * A registered subscriber is notified synchronously with the latest store value.
+   *
+   * @param subscriber - a subscriber in a form of a {@link SubscriberFunction} or a {@link SubscriberObject}. Returns a {@link Unsubscriber} (function or object with the `unsubscribe` method) that can be used to unregister and stop receiving notifications of store value changes.
+   * @returns The {@link UnsubscribeFunction} or {@link UnsubscribeObject} that can be used to unsubscribe (stop state change notifications).
+   */
+  subscribe(subscriber: Subscriber<T>): Unsubscriber;
+}
+
+/**
+ * An interface for interoperability between observable implementations. It only has to expose the `[Symbol.observable]` method that is supposed to return a subscribable store.
+ */
+export interface InteropObservable<T> {
+  [Symbol.observable]: () => SubscribableStore<T>;
+}
+
+/**
+ * Represents a store whose value can be retrieved with a get function that tracks its usage as specified in the Signal proposal specification.
+ */
+export interface SignalStore<T> {
+  get(): T;
+}
+
+/**
+ * Valid types that can be considered as a store.
+ */
+export type StoreInput<T> =
+  | (() => T)
+  | SignalStore<T>
+  | SubscribableStore<T>
+  | InteropObservable<T>;
+
+/**
+ * This interface augments the base {@link SubscribableStore} interface by requiring the return value of the subscribe method to be both a function and an object with the `unsubscribe` method.
+ *
+ * For {@link https://rxjs.dev/api/index/interface/InteropObservable | interoperability with rxjs}, it also implements the `[Symbol.observable]` method.
+ */
+export interface Readable<T> extends SignalStore<T>, SubscribableStore<T>, InteropObservable<T> {
+  subscribe(subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject;
+  [Symbol.observable](): Readable<T>;
+}
+
+/**
+ * This interface augments the base {@link Readable} interface by adding the ability to call the store as a function to get its value.
+ */
+export interface ReadableSignal<T> extends Readable<T> {
+  /**
+   * Returns the value of the store. This is a shortcut for calling {@link get} with the store.
+   */
+  (): T;
+}
+
+/**
+ * A function that can be used to update store's value. This function is called with the current value and should return new store value.
+ */
+export type Updater<T, U = T> = (value: T) => U;
+
+/**
+ * Builds on top of {@link Readable} and represents a store that can be manipulated from "outside": anyone with a reference to writable store can either update or completely replace state of a given store.
+ *
+ * @example
+ *
+ * ```typescript
+ * // reset counter's store value to 0 by using the {@link Writable.set} method
+ * counterStore.set(0);
+ *
+ * // increment counter's store value by using the {@link Writable.update} method
+ * counterStore.update(currentValue => currentValue + 1);
+ * ```
+ */
+export interface Writable<T, U = T> extends Readable<T> {
+  /**
+   * Replaces store's state with the provided value.
+   * @param value - value to be used as the new state of a store.
+   */
+  set(value: U): void;
+
+  /**
+   * Updates store's state by using an {@link Updater} function.
+   * @param updater - a function that takes the current state as an argument and returns the new state.
+   */
+  update(updater: Updater<T, U>): void;
+}
+
+/**
+ * Represents a store that implements both {@link ReadableSignal} and {@link Writable}.
+ * This is the type of objects returned by {@link writable}.
+ */
+export interface WritableSignal<T, U = T> extends ReadableSignal<T>, Writable<T, U> {}
+
+const noop = () => {};
+
+const noopUnsubscribe = () => {};
+noopUnsubscribe.unsubscribe = noopUnsubscribe;
+
+const bind = <T>(object: T | null | undefined, fnName: keyof T) => {
+  const fn = object ? object[fnName] : null;
+  return typeof fn === 'function' ? fn.bind(object) : noop;
+};
+
+const returnThis = function <T>(this: T): T {
+  return this;
+};
+
+const normalizeUnsubscribe = (
+  unsubscribe: Unsubscriber | void | null | undefined
+): UnsubscribeFunction & UnsubscribeObject => {
+  if (!unsubscribe) {
+    return noopUnsubscribe;
+  }
+  if ((unsubscribe as any).unsubscribe === unsubscribe) {
+    return unsubscribe as any;
+  }
+  const res: any =
+    typeof unsubscribe === 'function' ? () => unsubscribe() : () => unsubscribe.unsubscribe();
+  res.unsubscribe = res;
+  return res;
+};
+
+const normalizeSubscribe = <T>(store: SubscribableStore<T>): Readable<T>['subscribe'] => {
+  let res: Readable<T>['subscribe'] = store.subscribe as any;
+  if (!normalizedSubscribe.has(res)) {
+    res = (...args: [Subscriber<T>]) => normalizeUnsubscribe(store.subscribe(...args));
+    normalizedSubscribe.add(res);
+  }
+  return res;
+};
+
+/**
+ * Returns a wrapper (for the given store) which only exposes the {@link ReadableSignal} interface.
+ * This converts any {@link StoreInput} to a {@link ReadableSignal} and exposes the store as read-only.
+ *
+ * @param store - store to wrap
+ * @returns A wrapper which only exposes the {@link ReadableSignal} interface.
+ */
+export function asReadable<T>(store: StoreInput<T>): ReadableSignal<T>;
+/**
+ * Returns a wrapper (for the given store) which only exposes the {@link ReadableSignal} interface and
+ * also adds the given extra properties on the returned object.
+ *
+ * @param store - store to wrap
+ * @param extraProp - extra properties to add on the returned object
+ * @returns A wrapper which only exposes the {@link ReadableSignal} interface and the given extra properties.
+ */
+export function asReadable<T, U>(
+  store: StoreInput<T>,
+  extraProp: U
+): ReadableSignal<T> & Omit<U, keyof Readable<T>>;
+export function asReadable<T, U>(
+  store: StoreInput<T>,
+  extraProp?: U
+): ReadableSignal<T> & Omit<U, keyof Readable<T>> {
+  const storeGetter = toSignalFn(store);
+  return Object.assign(() => storeGetter(), extraProp, {
+    get: () => storeGetter(),
+    subscribe: toSubscribe(store),
+    [symbolObservable]: returnThis,
+  });
+}
+
+const defaultUpdate: any = function <T, U>(this: Writable<T, U>, updater: Updater<T, U>) {
+  this.set(updater(untrack(() => get(this))));
+};
+
+/**
+ * Returns a wrapper (for the given store) which only exposes the {@link WritableSignal} interface.
+ * When the value is changed from the given wrapper, the provided set function is called.
+ *
+ * @param store - store to wrap
+ * @param set - function that will be called when the value is changed from the wrapper
+ * (through the {@link Writable.set|set} or the {@link Writable.update|update} function).
+ * If set is not specified, a noop function is used (so the value of the store cannot be changed
+ * from the returned wrapper).
+ * @returns A wrapper which only exposes the {@link WritableSignal} interface.
+ */
+export function asWritable<T, W = T>(
+  store: StoreInput<T>,
+  set?: WritableSignal<T, W>['set']
+): WritableSignal<T, W>;
+/**
+ * Returns a wrapper (for the given store) which only exposes the {@link WritableSignal} interface and
+ * also adds the given extra properties on the returned object.
+ *
+ * @param store - store to wrap
+ * @param extraProps - object containing the extra properties to add on the returned object,
+ * and optionally the {@link Writable.set|set} and the {@link Writable.update|update} function of the
+ * {@link WritableSignal} interface.
+ * If the set function is not specified, a noop function is used.
+ *
+ * If the update function is not specified, a default function that calls set is used.
+ * @returns A wrapper which only exposes the {@link WritableSignal} interface and the given extra properties.
+ */
+export function asWritable<T, U, W = T>(
+  store: StoreInput<T>,
+  extraProps: U & Partial<Pick<WritableSignal<T, W>, 'set' | 'update'>>
+): WritableSignal<T, W> & Omit<U, keyof WritableSignal<T, W>>;
+export function asWritable<T, U, W = T>(
+  store: StoreInput<T>,
+  setOrExtraProps?:
+    | WritableSignal<T, W>['set']
+    | (U & Partial<Pick<WritableSignal<T, W>, 'set' | 'update'>>)
+): WritableSignal<T, W> & Omit<U, keyof WritableSignal<T, W>> {
+  return asReadable(
+    store,
+    typeof setOrExtraProps === 'function'
+      ? { set: setOrExtraProps, update: defaultUpdate }
+      : {
+          ...setOrExtraProps,
+          set: setOrExtraProps?.set ?? noop,
+          update: setOrExtraProps?.update ?? (setOrExtraProps?.set ? defaultUpdate : noop),
+        }
+  ) as any;
+}
+
+const triggerUpdate = Symbol();
+
 let inBatch = false;
 let plannedAsyncQueueProcessing = false;
 let asyncListenersQueue = new Set<() => void>();
@@ -238,296 +539,6 @@ const toSubscribe = <T>(store: StoreInput<T>): Readable<T>['subscribe'] => {
 };
 
 /**
- * Symbol used in {@link InteropObservable} allowing any object to expose an observable.
- */
-export const symbolObservable: typeof Symbol.observable =
-  (typeof Symbol === 'function' && Symbol.observable) || ('@@observable' as any);
-
-const oldSubscription = Symbol();
-
-/**
- * A callback invoked when a store value changes. It is called with the latest value of a given store.
- */
-export type SubscriberFunction<T> = ((value: T) => void) &
-  Partial<Omit<SubscriberObject<T>, 'next'>>;
-
-/**
- * A partial {@link https://github.com/tc39/proposal-observable#api | observer} notified when a store value changes. A store will call the {@link SubscriberObject.next | next} method every time the store's state is changing.
- */
-export interface SubscriberObject<T> {
-  /**
-   * A store will call this method every time the store's state is changing.
-   */
-  next: SubscriberFunction<T>;
-  /**
-   * Unused, only declared for compatibility with rxjs.
-   */
-  error?: any;
-  /**
-   * Unused, only declared for compatibility with rxjs.
-   */
-  complete?: any;
-  /**
-   * A store will call this method when it knows that the value will be changed.
-   * A call to this method will be followed by a call to {@link SubscriberObject.next | next} or to {@link SubscriberObject.resume | resume}.
-   */
-  pause: () => void;
-  /**
-   * A store will call this method if {@link SubscriberObject.pause | pause} was called previously
-   * and the value finally did not need to change.
-   */
-  resume: () => void;
-}
-
-/**
- * Expresses interest in store value changes over time. It can be either:
- * - a callback function: {@link SubscriberFunction};
- * - a partial observer: {@link SubscriberObject}.
- */
-export type Subscriber<T> = SubscriberFunction<T> | Partial<SubscriberObject<T>> | null | undefined;
-
-/**
- * A function to unsubscribe from value change notifications.
- */
-export type UnsubscribeFunction = () => void;
-
-/**
- * An object with the `unsubscribe` method.
- * Subscribable stores might choose to return such object instead of directly returning {@link UnsubscribeFunction} from a subscription call.
- */
-export interface UnsubscribeObject {
-  /**
-   * A method that acts as the {@link UnsubscribeFunction}.
-   */
-  unsubscribe: UnsubscribeFunction;
-}
-
-export type Unsubscriber = UnsubscribeObject | UnsubscribeFunction;
-
-/**
- * Represents a store accepting registrations (subscribers) and "pushing" notifications on each and every store value change.
- */
-export interface SubscribableStore<T> {
-  /**
-   * A method that makes it possible to register "interest" in store value changes over time.
-   * It is called each and every time the store's value changes.
-   *
-   * A registered subscriber is notified synchronously with the latest store value.
-   *
-   * @param subscriber - a subscriber in a form of a {@link SubscriberFunction} or a {@link SubscriberObject}. Returns a {@link Unsubscriber} (function or object with the `unsubscribe` method) that can be used to unregister and stop receiving notifications of store value changes.
-   * @returns The {@link UnsubscribeFunction} or {@link UnsubscribeObject} that can be used to unsubscribe (stop state change notifications).
-   */
-  subscribe(subscriber: Subscriber<T>): Unsubscriber;
-}
-
-/**
- * Represents a store whose value can be retrieved with a get function that tracks its usage as specified in the Signal proposal specification.
- */
-export interface SignalStore<T> {
-  get(): T;
-}
-
-/**
- * An interface for interoperability between observable implementations. It only has to expose the `[Symbol.observable]` method that is supposed to return a subscribable store.
- */
-export interface InteropObservable<T> {
-  [Symbol.observable]: () => SubscribableStore<T>;
-}
-
-/**
- * Valid types that can be considered as a store.
- */
-export type StoreInput<T> =
-  | (() => T)
-  | SignalStore<T>
-  | SubscribableStore<T>
-  | InteropObservable<T>;
-
-/**
- * This interface augments the base {@link SubscribableStore} interface by requiring the return value of the subscribe method to be both a function and an object with the `unsubscribe` method.
- *
- * For {@link https://rxjs.dev/api/index/interface/InteropObservable | interoperability with rxjs}, it also implements the `[Symbol.observable]` method.
- */
-export interface Readable<T> extends SignalStore<T>, SubscribableStore<T>, InteropObservable<T> {
-  subscribe(subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject;
-  [Symbol.observable](): Readable<T>;
-}
-
-/**
- * This interface augments the base {@link Readable} interface by adding the ability to call the store as a function to get its value.
- */
-export interface ReadableSignal<T> extends Readable<T> {
-  /**
-   * Returns the value of the store. This is a shortcut for calling {@link get} with the store.
-   */
-  (): T;
-}
-
-/**
- * A function that can be used to update store's value. This function is called with the current value and should return new store value.
- */
-export type Updater<T, U = T> = (value: T) => U;
-
-/**
- * Builds on top of {@link Readable} and represents a store that can be manipulated from "outside": anyone with a reference to writable store can either update or completely replace state of a given store.
- *
- * @example
- *
- * ```typescript
- * // reset counter's store value to 0 by using the {@link Writable.set} method
- * counterStore.set(0);
- *
- * // increment counter's store value by using the {@link Writable.update} method
- * counterStore.update(currentValue => currentValue + 1);
- * ```
- */
-export interface Writable<T, U = T> extends Readable<T> {
-  /**
-   * Replaces store's state with the provided value.
-   * @param value - value to be used as the new state of a store.
-   */
-  set(value: U): void;
-
-  /**
-   * Updates store's state by using an {@link Updater} function.
-   * @param updater - a function that takes the current state as an argument and returns the new state.
-   */
-  update(updater: Updater<T, U>): void;
-}
-
-/**
- * Represents a store that implements both {@link ReadableSignal} and {@link Writable}.
- * This is the type of objects returned by {@link writable}.
- */
-export interface WritableSignal<T, U = T> extends ReadableSignal<T>, Writable<T, U> {}
-
-const noop = () => {};
-
-const noopUnsubscribe = () => {};
-noopUnsubscribe.unsubscribe = noopUnsubscribe;
-
-const bind = <T>(object: T | null | undefined, fnName: keyof T) => {
-  const fn = object ? object[fnName] : null;
-  return typeof fn === 'function' ? fn.bind(object) : noop;
-};
-
-const returnThis = function <T>(this: T): T {
-  return this;
-};
-
-const normalizeUnsubscribe = (
-  unsubscribe: Unsubscriber | void | null | undefined
-): UnsubscribeFunction & UnsubscribeObject => {
-  if (!unsubscribe) {
-    return noopUnsubscribe;
-  }
-  if ((unsubscribe as any).unsubscribe === unsubscribe) {
-    return unsubscribe as any;
-  }
-  const res: any =
-    typeof unsubscribe === 'function' ? () => unsubscribe() : () => unsubscribe.unsubscribe();
-  res.unsubscribe = res;
-  return res;
-};
-
-const normalizeSubscribe = <T>(store: SubscribableStore<T>): Readable<T>['subscribe'] => {
-  let res: Readable<T>['subscribe'] = store.subscribe as any;
-  if (!normalizedSubscribe.has(res)) {
-    res = (...args: [Subscriber<T>]) => normalizeUnsubscribe(store.subscribe(...args));
-    normalizedSubscribe.add(res);
-  }
-  return res;
-};
-
-/**
- * Returns a wrapper (for the given store) which only exposes the {@link ReadableSignal} interface.
- * This converts any {@link StoreInput} to a {@link ReadableSignal} and exposes the store as read-only.
- *
- * @param store - store to wrap
- * @returns A wrapper which only exposes the {@link ReadableSignal} interface.
- */
-export function asReadable<T>(store: StoreInput<T>): ReadableSignal<T>;
-/**
- * Returns a wrapper (for the given store) which only exposes the {@link ReadableSignal} interface and
- * also adds the given extra properties on the returned object.
- *
- * @param store - store to wrap
- * @param extraProp - extra properties to add on the returned object
- * @returns A wrapper which only exposes the {@link ReadableSignal} interface and the given extra properties.
- */
-export function asReadable<T, U>(
-  store: StoreInput<T>,
-  extraProp: U
-): ReadableSignal<T> & Omit<U, keyof Readable<T>>;
-export function asReadable<T, U>(
-  store: StoreInput<T>,
-  extraProp?: U
-): ReadableSignal<T> & Omit<U, keyof Readable<T>> {
-  const storeGetter = toSignalFn(store);
-  return Object.assign(() => storeGetter(), extraProp, {
-    get: () => storeGetter(),
-    subscribe: toSubscribe(store),
-    [symbolObservable]: returnThis,
-  });
-}
-
-const defaultUpdate: any = function <T, U>(this: Writable<T, U>, updater: Updater<T, U>) {
-  this.set(updater(untrack(() => get(this))));
-};
-
-/**
- * Returns a wrapper (for the given store) which only exposes the {@link WritableSignal} interface.
- * When the value is changed from the given wrapper, the provided set function is called.
- *
- * @param store - store to wrap
- * @param set - function that will be called when the value is changed from the wrapper
- * (through the {@link Writable.set|set} or the {@link Writable.update|update} function).
- * If set is not specified, a noop function is used (so the value of the store cannot be changed
- * from the returned wrapper).
- * @returns A wrapper which only exposes the {@link WritableSignal} interface.
- */
-export function asWritable<T, W = T>(
-  store: StoreInput<T>,
-  set?: WritableSignal<T, W>['set']
-): WritableSignal<T, W>;
-/**
- * Returns a wrapper (for the given store) which only exposes the {@link WritableSignal} interface and
- * also adds the given extra properties on the returned object.
- *
- * @param store - store to wrap
- * @param extraProps - object containing the extra properties to add on the returned object,
- * and optionally the {@link Writable.set|set} and the {@link Writable.update|update} function of the
- * {@link WritableSignal} interface.
- * If the set function is not specified, a noop function is used.
- *
- * If the update function is not specified, a default function that calls set is used.
- * @returns A wrapper which only exposes the {@link WritableSignal} interface and the given extra properties.
- */
-export function asWritable<T, U, W = T>(
-  store: StoreInput<T>,
-  extraProps: U & Partial<Pick<WritableSignal<T, W>, 'set' | 'update'>>
-): WritableSignal<T, W> & Omit<U, keyof WritableSignal<T, W>>;
-export function asWritable<T, U, W = T>(
-  store: StoreInput<T>,
-  setOrExtraProps?:
-    | WritableSignal<T, W>['set']
-    | (U & Partial<Pick<WritableSignal<T, W>, 'set' | 'update'>>)
-): WritableSignal<T, W> & Omit<U, keyof WritableSignal<T, W>> {
-  return asReadable(
-    store,
-    typeof setOrExtraProps === 'function'
-      ? { set: setOrExtraProps, update: defaultUpdate }
-      : {
-          ...setOrExtraProps,
-          set: setOrExtraProps?.set ?? noop,
-          update: setOrExtraProps?.update ?? (setOrExtraProps?.set ? defaultUpdate : noop),
-        }
-  ) as any;
-}
-
-const triggerUpdate = Symbol();
-
-/**
  * Batches multiple changes to stores while calling the provided function,
  * preventing derived stores from updating until the function returns,
  * to avoid unnecessary recomputations.
@@ -567,7 +578,6 @@ const triggerUpdate = Symbol();
  * });
  * ```
  */
-
 export const batch = <T>(fn: () => T): T => {
   const rootBatch = !inBatch;
   if (rootBatch) {

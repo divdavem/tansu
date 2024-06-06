@@ -63,7 +63,9 @@ export interface SubscriberObject<T> {
 }
 
 interface PrivateSubscriberObject<T> extends Omit<SubscriberObject<T>, typeof oldSubscription> {
+  _new: boolean;
   _paused: boolean;
+  _changeChecker: () => { value: T; changed: boolean };
 }
 
 /**
@@ -198,13 +200,30 @@ const bind = <T>(object: T | null | undefined, fnName: keyof T) => {
   return typeof fn === 'function' ? fn.bind(object) : noop;
 };
 
-const toSubscriberObject = <T>(subscriber: Subscriber<T>): PrivateSubscriberObject<T> => ({
+const changeChecker = <T>(store: SignalStore<T>): PrivateSubscriberObject<T>['_changeChecker'] => {
+  let changed = false;
+  let value: T = undefined as T;
+  const computedSignal = new Signal.Computed(() => {
+    changed = true;
+    value = store.get();
+  });
+  return () => {
+    changed = false;
+    computedSignal.get();
+    return { changed, value };
+  };
+};
+
+const toSubscriberObject = <T>(
+  subscriber: Subscriber<T>,
+  _changeChecker: PrivateSubscriberObject<T>['_changeChecker']
+): PrivateSubscriberObject<T> => ({
   next: typeof subscriber === 'function' ? subscriber.bind(null) : bind(subscriber, 'next'),
   pause: bind(subscriber, 'pause'),
   resume: bind(subscriber, 'resume'),
-  _value: undefined as any,
-  _valueIndex: 0,
+  _new: true,
   _paused: false,
+  _changeChecker,
 });
 
 const returnThis = function <T>(this: T): T {
@@ -356,18 +375,21 @@ const returnTrue = () => true;
 const normalizedSubscribe = new WeakSet();
 const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
   let changeNotification = false;
-  const computedWrapper = new Signal.Computed(() => store.get(), { equals: returnFalse });
+  const signalToWatch = new Signal.Computed(() => {
+    store.get();
+  });
   const watcher = new Signal.subtle.Watcher(() => {
     changeNotification = true;
-    unplanNotifyStore(notifier);
-    planNotifyStore(notifier);
+    unplanNotifyStore(storeNotifier);
+    planNotifyStore(storeNotifier);
     for (const subscriber of [...subscribers]) {
-      subscriber.pause();
+      // FIXME: skip new subscriber?
+      pauseSubscriber(subscriber);
     }
     watcher.watch(); // re-enable watch
   });
-  const subscribers = new Set<{ pause(): void; notify(): void }>();
-  const notifier = () => {
+  const subscribers = new Set<PrivateSubscriberObject<T>>();
+  const storeNotifier = () => {
     changeNotification = false;
     for (const subscriber of [...subscribers]) {
       if (changeNotification) {
@@ -377,94 +399,67 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
         // with the correct final value and in the right order
         return;
       }
-      subscriber.notify();
+      if (!subscriber._new) {
+        notifySubscriber(subscriber);
+      }
     }
   };
-  const addSubscriber = (subscriber: { pause(): void; notify(): void }) => {
-    subscribers.add(subscriber);
+  const pauseSubscriber = (subscriber: PrivateSubscriberObject<T>) => {
+    if (!subscriber._paused && !subscriber._new) {
+      subscriber._paused = true;
+      subscriber.pause();
+    }
+  };
+  const notifySubscriber = (subscriber: PrivateSubscriberObject<T>) =>
+    untrack(() => {
+      signalToWatch.get();
+      const { changed, value } = subscriber._changeChecker();
+      const wasPaused = subscriber._paused;
+      subscriber._paused = false;
+      subscriber._new = false;
+      if (changed) {
+        // the value really changed
+        subscriber.next(value);
+      } else if (wasPaused) {
+        // the value did not change
+        subscriber.resume();
+      }
+    });
+
+  const oldSubscriptionsMap = new WeakMap<any, PrivateSubscriberObject<T>['_changeChecker']>();
+
+  const res = (subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject => {
+    const oldSubscriptionRef = subscriber?.[oldSubscription];
+    const oldSubscriptionChecker = oldSubscriptionRef
+      ? oldSubscriptionsMap.get(oldSubscriptionRef)
+      : null;
+    const subscriberObject = toSubscriberObject(
+      subscriber,
+      oldSubscriptionChecker ?? changeChecker(store)
+    );
+    subscribers.add(subscriberObject);
     if (subscribers.size === 1) {
-      watcher.watch(computedWrapper);
+      watcher.watch(signalToWatch);
     }
-  };
-  const removeSubscriber = (subscriber: { pause(): void; notify(): void }) => {
-    subscribers.delete(subscriber);
-    if (subscribers.size === 0) {
-      watcher.unwatch(computedWrapper);
-      unplanNotifyStore(notifier);
-    }
-  };
-  const createSubscription = () => {
-    let next: (value: T) => void;
-    let pause: () => void;
-    let resume: () => void;
-    let paused = false;
-    let hasChanged = false;
-    const computedSignal = new Signal.Computed(
-      () => {
-        hasChanged = true;
-        return computedWrapper.get();
-      },
-      { equals: returnFalse }
-    );
-    const subscriberObj = {
-      notify: () =>
-        untrack(() => {
-          // check if the value of the signal has changed:
-          hasChanged = false;
-          const wasPaused = paused;
-          const value = computedSignal.get();
-          paused = false;
-          if (hasChanged) {
-            // the value really changed
-            next(value);
-          } else if (wasPaused) {
-            // the value did not change
-            resume();
-          }
-        }),
-      pause: () => {
-        paused = true;
-        pause();
-      },
-    };
-    const subscription = (subscriber: Subscriber<T>) => {
-      let active = true;
-      next = typeof subscriber === 'function' ? subscriber : bind(subscriber, 'next');
-      pause = bind(subscriber, 'pause');
-      resume = bind(subscriber, 'resume');
-      addSubscriber(subscriberObj);
-      subscriberObj.notify();
-
-      const unsubscribe: UnsubscribeFunction & UnsubscribeObject = () => {
-        if (active) {
-          active = false;
-          next = noop;
-          pause = noop;
-          resume = noop;
-          oldSubscriptionsMap.set(unsubscribe, subscription);
-          removeSubscriber(subscriberObj);
+    notifySubscriber(subscriberObject);
+    const unsubscribe = () => {
+      const removed = subscribers.delete(subscriberObject);
+      subscriberObject.next = noop;
+      subscriberObject.pause = noop;
+      subscriberObject.resume = noop;
+      if (removed) {
+        oldSubscriptionsMap.set(unsubscribe, subscriberObject._changeChecker);
+        if (subscribers.size === 0) {
+          watcher.unwatch(signalToWatch);
+          unplanNotifyStore(storeNotifier);
         }
-      };
-      unsubscribe.unsubscribe = unsubscribe;
-      (unsubscribe as any)[triggerUpdate] = () => subscriberObj.notify();
-      return unsubscribe;
+      }
     };
-    return subscription;
+    (unsubscribe as any)[triggerUpdate] = () => notifySubscriber(subscriberObject);
+    unsubscribe.unsubscribe = unsubscribe;
+    return unsubscribe;
   };
 
-  const oldSubscriptionsMap = new WeakMap<any, ReturnType<typeof createSubscription>>();
-  const findOldSubscription = (ref: any) => {
-    const res = ref && oldSubscriptionsMap.get(ref);
-    if (res) {
-      oldSubscriptionsMap.delete(ref);
-    }
-    return res;
-  };
-
-  const res = (subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject =>
-    (findOldSubscription((subscriber as any)?.[oldSubscription]) || createSubscription())(
-      subscriber
-    );
   normalizedSubscribe.add(res);
   return res;
 };

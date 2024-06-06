@@ -45,6 +45,44 @@ const returnFalse = () => false;
 const returnTrue = () => true;
 const normalizedSubscribe = new WeakSet();
 const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
+  let changeNotification = false;
+  const computedWrapper = new Signal.Computed(() => store.get(), { equals: returnFalse });
+  const watcher = new Signal.subtle.Watcher(() => {
+    changeNotification = true;
+    unplanListener(notifier);
+    planListener(notifier);
+    for (const subscriber of [...subscribers]) {
+      subscriber.pause();
+    }
+    watcher.watch(); // re-enable watch
+  });
+  const subscribers = new Set<{ pause(): void; notify(): void }>();
+  const notifier = () => {
+    changeNotification = false;
+    for (const subscriber of [...subscribers]) {
+      if (changeNotification) {
+        // the value of the store can change while notifying subscribers
+        // in that case, let's just stop notifying subscribers
+        // they will be called later through another notifier call
+        // with the correct final value and in the right order
+        return;
+      }
+      subscriber.notify();
+    }
+  };
+  const addSubscriber = (subscriber: { pause(): void; notify(): void }) => {
+    subscribers.add(subscriber);
+    if (subscribers.size === 1) {
+      watcher.watch(computedWrapper);
+    }
+  };
+  const removeSubscriber = (subscriber: { pause(): void; notify(): void }) => {
+    subscribers.delete(subscriber);
+    if (subscribers.size === 0) {
+      watcher.unwatch(computedWrapper);
+      unplanListener(notifier);
+    }
+  };
   const createSubscription = () => {
     let next: (value: T) => void;
     let pause: () => void;
@@ -54,46 +92,38 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
     const computedSignal = new Signal.Computed(
       () => {
         hasChanged = true;
-        return store.get();
+        return computedWrapper.get();
       },
       { equals: returnFalse }
     );
-    const notifyListener = (first = false) =>
-      untrack(() => {
-        // check if the value of the signal has changed:
-        hasChanged = false;
-        const wasPaused = paused;
-        if (first) {
-          watcher.watch(computedSignal);
-        } else {
-          watcher.watch();
-        }
-        const value = computedSignal.get();
-        paused = false;
-        if (hasChanged) {
-          // the value really changed
-          next(value);
-        } else if (wasPaused) {
-          // the value did not change
-          resume();
-        }
-      });
-    const watcher = new Signal.subtle.Watcher(() => {
-      if (paused) {
-        console.log('ASSERT ERROR: paused was expected to be false in watcher callback');
-      }
-      if (!paused) {
+    const subscriberObj = {
+      notify: () =>
+        untrack(() => {
+          // check if the value of the signal has changed:
+          hasChanged = false;
+          const wasPaused = paused;
+          const value = computedSignal.get();
+          paused = false;
+          if (hasChanged) {
+            // the value really changed
+            next(value);
+          } else if (wasPaused) {
+            // the value did not change
+            resume();
+          }
+        }),
+      pause: () => {
         paused = true;
         pause();
-        planListener(notifyListener);
-      }
-    });
+      },
+    };
     const subscription = (subscriber: Subscriber<T>) => {
       let active = true;
       next = typeof subscriber === 'function' ? subscriber : bind(subscriber, 'next');
       pause = bind(subscriber, 'pause');
       resume = bind(subscriber, 'resume');
-      notifyListener(true);
+      addSubscriber(subscriberObj);
+      subscriberObj.notify();
 
       const unsubscribe: UnsubscribeFunction & UnsubscribeObject = () => {
         if (active) {
@@ -102,12 +132,11 @@ const createSubscribeFromSignal = <T>(store: SignalStore<T>) => {
           pause = noop;
           resume = noop;
           oldSubscriptionsMap.set(unsubscribe, subscription);
-          watcher.unwatch(computedSignal);
-          unplanListener(notifyListener);
+          removeSubscriber(subscriberObj);
         }
       };
       unsubscribe.unsubscribe = unsubscribe;
-      (unsubscribe as any)[triggerUpdate] = notifyListener;
+      (unsubscribe as any)[triggerUpdate] = () => subscriberObj.notify();
       return unsubscribe;
     };
     return subscription;

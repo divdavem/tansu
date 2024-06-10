@@ -1254,13 +1254,29 @@ export function computed<T>(
   fn: () => T,
   { equal: optEqual, notEqual: optNotEqual }: Omit<StoreOptions<T>, 'onUse'> = {}
 ): ReadableSignal<T> {
-  return asReadable(
-    new Signal.Computed(fn, {
+  let called = false;
+  const store = new Signal.Computed(
+    () => {
+      called = true;
+      return fn();
+    },
+    {
       equals: optEqual
         ? (a, b) => optEqual(a, b)
         : optNotEqual
           ? (a, b) => !optNotEqual(a, b)
           : equal,
-    })
+    }
   );
+  return asReadable(() => {
+    do {
+      called = false;
+      store.get();
+      const dependencies = Signal.subtle.introspectSources(store);
+      for (const dep of dependencies) {
+        dep.get();
+      }
+    } while (called);
+    return store.get();
+  });
 }

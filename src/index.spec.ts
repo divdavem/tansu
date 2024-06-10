@@ -152,6 +152,15 @@ describe('stores', () => {
       expect(store2()).toBe(1);
     });
 
+    it('should work to use subscribe only and use it in a computed', () => {
+      const store1 = writable(0);
+      const store2 = asReadable({ subscribe: store1.subscribe });
+      const store3 = computed(() => store2());
+      expect(store3()).toBe(0);
+      store1.set(1);
+      expect(store3()).toBe(1);
+    });
+
     it('should allow overriding notEqual', () => {
       const notEqualCalls: [number, number][] = [];
       class ModuloStore extends Store<number> {

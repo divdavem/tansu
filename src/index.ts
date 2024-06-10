@@ -486,25 +486,42 @@ const onUseLogic = (onUseFn: () => Unsubscriber | void) => {
   return { startUse, endUse, wrapCall };
 };
 
+class ListenerState<T> extends Signal.State<T> {
+  #wrapCall: <T>(fn: () => T) => T;
+
+  constructor(store: SubscribableStore<T>) {
+    const subscriber: SubscriberFunction<T> & Partial<SubscriberObject<T>> = (value: T) =>
+      batch(() => super.set(value));
+
+    subscriber.next = subscriber;
+
+    let unsubscribe: any;
+    const { startUse, endUse, wrapCall } = onUseLogic(() => {
+      unsubscribe = normalizeUnsubscribe(store.subscribe(subscriber));
+      return () => {
+        unsubscribe();
+        (subscriber as any)[oldSubscription] = unsubscribe;
+      };
+    });
+    super(undefined as T, {
+      equals: returnFalse,
+      [Signal.subtle.watched]: startUse,
+      [Signal.subtle.unwatched]: endUse,
+    });
+    this.#wrapCall = wrapCall;
+  }
+
+  override get(): T {
+    return this.#wrapCall(() => super.get());
+  }
+  override set() {
+    throw new Error('Read-only!');
+  }
+}
+
 const createSignalFromSubscribableStore = <T>(store: SubscribableStore<T>) => {
-  const subscriber: SubscriberFunction<T> & Partial<SubscriberObject<T>> = (value: T) =>
-    batch(() => signal.set(value));
-
-  subscriber.next = subscriber;
-
-  const { startUse, endUse, wrapCall } = onUseLogic(() => {
-    const unsubscribe = normalizeUnsubscribe(store.subscribe(subscriber));
-    return () => {
-      unsubscribe();
-      (subscriber as any)[oldSubscription] = unsubscribe;
-    };
-  });
-  const signal = new Signal.State(undefined as T, {
-    equals: returnFalse,
-    [Signal.subtle.watched]: startUse,
-    [Signal.subtle.unwatched]: endUse,
-  });
-  return () => wrapCall(() => signal.get());
+  const signal = new ListenerState(store);
+  return () => signal.get();
 };
 
 const toSignalFnCache = new Map<StoreInput<any>, () => any>();

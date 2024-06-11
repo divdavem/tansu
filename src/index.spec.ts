@@ -144,6 +144,23 @@ describe('stores', () => {
       ]);
     });
 
+    it('should work to use subscribe only', () => {
+      const store1 = writable(0);
+      const store2 = asReadable({ subscribe: store1.subscribe });
+      expect(store2()).toBe(0);
+      store1.set(1);
+      expect(store2()).toBe(1);
+    });
+
+    it('should work to use subscribe only and use it in a computed', () => {
+      const store1 = writable(0);
+      const store2 = asReadable({ subscribe: store1.subscribe });
+      const store3 = computed(() => store2());
+      expect(store3()).toBe(0);
+      store1.set(1);
+      expect(store3()).toBe(1);
+    });
+
     it('should allow overriding notEqual', () => {
       const notEqualCalls: [number, number][] = [];
       class ModuloStore extends Store<number> {
@@ -763,6 +780,35 @@ describe('stores', () => {
       // unregistering last subscriber - cleanup fn called
       unSub1();
       expect(callCounter).toBe(0);
+    });
+
+    it('should call onUse when reading value and using it in computed', () => {
+      const calls: (-1 | 1)[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const readableWithSet = readable(0, (set) => {
+        calls.push(1);
+        return () => {
+          calls.push(-1);
+        };
+      });
+      const dependingStore = computed(() => readableWithSet());
+
+      // so subscribers, provided function is not called
+      expect(calls).toEqual([]);
+      expect(readableWithSet()).toBe(0);
+      expect(calls).toEqual([1, -1]);
+      expect(dependingStore()).toBe(0);
+      expect(calls).toEqual([1, -1, 1, -1]);
+      expect(dependingStore()).toBe(0);
+      expect(calls).toEqual([1, -1, 1, -1, 1, -1]);
+      const unsubscribe = dependingStore.subscribe(() => {});
+      expect(calls).toEqual([1, -1, 1, -1, 1, -1, 1]);
+      const unsubscribe2 = dependingStore.subscribe(() => {});
+      unsubscribe();
+      expect(dependingStore()).toBe(0);
+      expect(calls).toEqual([1, -1, 1, -1, 1, -1, 1]);
+      unsubscribe2();
+      expect(calls).toEqual([1, -1, 1, -1, 1, -1, 1, -1]);
     });
 
     it('should give access to both set and update function in the second argument of the readable shorthand', () => {

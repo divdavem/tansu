@@ -79,6 +79,9 @@ export class RawStoreWritable<T> implements RawStore<T, ProducerConsumerLink<T>>
     const indexInProducer = consumerLinks.length;
     link.indexInProducer = indexInProducer;
     consumerLinks[indexInProducer] = link;
+    if (indexInProducer === 0) {
+      this.checkUsed();
+    }
     return link;
   }
 
@@ -102,6 +105,7 @@ export class RawStoreWritable<T> implements RawStore<T, ProducerConsumerLink<T>>
     }
   }
 
+  checkUsed(): void {}
   checkUnused(): void {}
   updateValue(): void {}
 

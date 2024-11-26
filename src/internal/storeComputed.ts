@@ -77,7 +77,9 @@ export class RawStoreComputed<T>
         link.producer.registerConsumer(link);
       }
     }
-    this.flags |= RawStoreFlags.DIRTY;
+    if (this.epoch !== epoch) {
+      this.flags |= RawStoreFlags.DIRTY;
+    }
   }
 
   override endUse(): void {

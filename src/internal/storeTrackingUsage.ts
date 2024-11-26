@@ -29,18 +29,23 @@ export const flushUnused = (): void => {
 };
 
 export abstract class RawStoreTrackingUsage<T> extends RawStoreWritable<T> {
+  private extraUsages = 0;
   abstract startUse(): void;
   abstract endUse(): void;
 
   override updateValue(): void {
+    // Ignoring coverage for the following lines because, unless there is a bug in tansu (which would have to be fixed!)
+    // there should be no way to trigger this error.
+    /* v8 ignore next 3 */
+    if (!(this.flags & RawStoreFlags.START_USE_CALLED)) {
+      throw new Error('assert failed: untracked producer usage');
+    }
+    super.updateValue();
+  }
+
+  override checkUsed(): void {
     const flags = this.flags;
     if (!(flags & RawStoreFlags.START_USE_CALLED)) {
-      // Ignoring coverage for the following lines because, unless there is a bug in tansu (which would have to be fixed!)
-      // there should be no way to trigger this error.
-      /* v8 ignore next 3 */
-      if (!(flags & RawStoreFlags.INSIDE_GET) && !this.consumerLinks?.length) {
-        throw new Error('assert failed: untracked producer usage');
-      }
       this.flags |= RawStoreFlags.START_USE_CALLED;
       untrack(() => this.startUse());
     }
@@ -48,13 +53,11 @@ export abstract class RawStoreTrackingUsage<T> extends RawStoreWritable<T> {
 
   override checkUnused(): void {
     const flags = this.flags;
-    // Ignoring coverage for the following lines because, unless there is a bug in tansu (which would have to be fixed!)
-    // there should be no way to trigger this error.
-    /* v8 ignore next 3 */
-    if (flags & RawStoreFlags.INSIDE_GET) {
-      throw new Error('assert failed: INSIDE_GET flag in checkUnused');
-    }
-    if (flags & RawStoreFlags.START_USE_CALLED && !this.consumerLinks?.length) {
+    if (
+      flags & RawStoreFlags.START_USE_CALLED &&
+      !this.consumerLinks?.length &&
+      !this.extraUsages
+    ) {
       if (inFlushUnused || flags & RawStoreFlags.HAS_VISIBLE_ONUSE) {
         this.flags &= ~RawStoreFlags.START_USE_CALLED;
         untrack(() => this.endUse());
@@ -74,11 +77,9 @@ export abstract class RawStoreTrackingUsage<T> extends RawStoreWritable<T> {
     if (activeConsumer) {
       return activeConsumer.addProducer(this);
     } else {
-      if (this.flags & RawStoreFlags.INSIDE_GET) {
-        throw new Error('recursive computed');
-      }
-      this.flags |= RawStoreFlags.INSIDE_GET;
+      this.extraUsages++;
       try {
+        this.checkUsed();
         this.updateValue();
         // Ignoring coverage for the following lines because, unless there is a bug in tansu (which would have to be fixed!)
         // there should be no way to trigger this error.
@@ -88,8 +89,11 @@ export abstract class RawStoreTrackingUsage<T> extends RawStoreWritable<T> {
         }
         return this.readValue();
       } finally {
-        this.flags &= ~RawStoreFlags.INSIDE_GET;
-        this.checkUnused();
+        const extraUsages = this.extraUsages - 1;
+        this.extraUsages = extraUsages;
+        if (extraUsages === 0) {
+          this.checkUnused();
+        }
       }
     }
   }

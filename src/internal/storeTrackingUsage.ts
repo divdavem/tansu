@@ -2,8 +2,44 @@ import { RawStoreFlags } from './store';
 import { checkNotInNotificationPhase, RawStoreWritable } from './storeWritable';
 import { activeConsumer, untrack } from './untrack';
 
-let flushUnusedQueue: RawStoreTrackingUsage<any>[] | null = null;
+let firstInFlushUnusedQueue: RawStoreTrackingUsage<any> | null = null;
+let lastInFlushUnusedQueue: RawStoreTrackingUsage<any> | null = null;
 let inFlushUnused = false;
+let plannedFlushUnused = false;
+
+const removeFromQueue = (store: RawStoreTrackingUsage<any>): boolean => {
+  const prev = store.prevInQueue;
+  const next = store.nextInQueue;
+  if (prev || next || firstInFlushUnusedQueue === store) {
+    store.prevInQueue = null;
+    store.nextInQueue = null;
+    if (prev) {
+      prev.nextInQueue = next;
+    } else {
+      firstInFlushUnusedQueue = next;
+    }
+    if (next) {
+      next.prevInQueue = prev;
+    } else {
+      lastInFlushUnusedQueue = prev;
+    }
+    return true;
+  }
+  return false;
+};
+
+const addToQueue = (store: RawStoreTrackingUsage<any>) => {
+  if (store.prevInQueue || store.nextInQueue || firstInFlushUnusedQueue === store) {
+    return;
+  }
+  store.prevInQueue = lastInFlushUnusedQueue;
+  if (lastInFlushUnusedQueue) {
+    lastInFlushUnusedQueue.nextInQueue = store;
+  } else {
+    firstInFlushUnusedQueue = store;
+  }
+  lastInFlushUnusedQueue = store;
+};
 
 export const flushUnused = (): void => {
   // Ignoring coverage for the following lines because, unless there is a bug in tansu (which would have to be fixed!)
@@ -12,16 +48,14 @@ export const flushUnused = (): void => {
   if (inFlushUnused) {
     throw new Error('assert failed: recursive flushUnused call');
   }
+  plannedFlushUnused = false;
   inFlushUnused = true;
   try {
-    const queue = flushUnusedQueue;
-    if (queue) {
-      flushUnusedQueue = null;
-      for (let i = 0, l = queue.length; i < l; i++) {
-        const producer = queue[i];
-        producer.flags &= ~RawStoreFlags.FLUSH_PLANNED;
-        producer.checkUnused();
-      }
+    while (firstInFlushUnusedQueue) {
+      const producer = firstInFlushUnusedQueue;
+      removeFromQueue(producer);
+      producer.flags &= ~RawStoreFlags.FLUSH_PLANNED;
+      producer.checkUnused();
     }
   } finally {
     inFlushUnused = false;
@@ -30,6 +64,8 @@ export const flushUnused = (): void => {
 
 export abstract class RawStoreTrackingUsage<T> extends RawStoreWritable<T> {
   private extraUsages = 0;
+  nextInQueue: RawStoreTrackingUsage<any> | null = null;
+  prevInQueue: RawStoreTrackingUsage<any> | null = null;
   abstract startUse(): void;
   abstract endUse(): void;
 
@@ -41,6 +77,10 @@ export abstract class RawStoreTrackingUsage<T> extends RawStoreWritable<T> {
       /* v8 ignore next 3 */
       if (!this.extraUsages && !this.consumerFirst) {
         throw new Error('assert failed: untracked producer usage');
+      }
+      if (flags & RawStoreFlags.FLUSH_PLANNED) {
+        removeFromQueue(this);
+        this.flags &= ~RawStoreFlags.FLUSH_PLANNED;
       }
       this.flags |= RawStoreFlags.START_USE_CALLED;
       untrack(() => this.startUse());
@@ -55,11 +95,11 @@ export abstract class RawStoreTrackingUsage<T> extends RawStoreWritable<T> {
         untrack(() => this.endUse());
       } else if (!(flags & RawStoreFlags.FLUSH_PLANNED)) {
         this.flags |= RawStoreFlags.FLUSH_PLANNED;
-        if (!flushUnusedQueue) {
-          flushUnusedQueue = [];
+        if (!plannedFlushUnused) {
+          plannedFlushUnused = true;
           queueMicrotask(flushUnused);
         }
-        flushUnusedQueue.push(this);
+        addToQueue(this);
       }
     }
   }

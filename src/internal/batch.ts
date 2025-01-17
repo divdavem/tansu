@@ -1,7 +1,45 @@
 import type { SubscribeConsumer } from './subscribeConsumer';
 
-export const subscribersQueue: SubscribeConsumer<any, any>[] = [];
+let firstSubscriberInQueue: SubscribeConsumer<any, any> | null = null;
+let lastSubscriberInQueue: SubscribeConsumer<any, any> | null = null;
 let willProcessQueue = false;
+
+export const removeFromQueue = (consumer: SubscribeConsumer<any, any>): boolean => {
+  const prev = consumer.prevInQueue;
+  const next = consumer.nextInQueue;
+  if (prev || next || firstSubscriberInQueue === consumer) {
+    consumer.prevInQueue = null;
+    consumer.nextInQueue = null;
+    if (prev) {
+      prev.nextInQueue = next;
+    } else {
+      firstSubscriberInQueue = next;
+    }
+    if (next) {
+      next.prevInQueue = prev;
+    } else {
+      lastSubscriberInQueue = prev;
+    }
+    return true;
+  }
+  return false;
+};
+
+export const addToQueue = (consumer: SubscribeConsumer<any, any>): boolean => {
+  if (consumer === lastSubscriberInQueue) {
+    // already the last in the queue, nothing to do !
+    return false;
+  }
+  const existing = removeFromQueue(consumer);
+  consumer.prevInQueue = lastSubscriberInQueue;
+  if (lastSubscriberInQueue) {
+    lastSubscriberInQueue.nextInQueue = consumer;
+  } else {
+    firstSubscriberInQueue = consumer;
+  }
+  lastSubscriberInQueue = consumer;
+  return !existing;
+};
 
 /**
  * Batches multiple changes to stores while calling the provided function,
@@ -53,8 +91,9 @@ export const batch = <T>(fn: () => T): T => {
     res = fn();
   } finally {
     if (needsProcessQueue) {
-      while (subscribersQueue.length > 0) {
-        const consumer = subscribersQueue.shift()!;
+      while (firstSubscriberInQueue) {
+        const consumer = firstSubscriberInQueue;
+        removeFromQueue(consumer);
         try {
           consumer.notify();
         } catch (e) {

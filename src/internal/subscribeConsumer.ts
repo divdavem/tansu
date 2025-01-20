@@ -1,5 +1,6 @@
 import type { Subscriber, SubscriberObject } from '../types';
 import { addToQueue, removeFromQueue } from './batch';
+import type { QueueItem } from './linkedQueue';
 import { updateLinkProducerValue, type BaseLink, type Consumer, type RawStore } from './store';
 
 export const noop = (): void => {};
@@ -21,11 +22,13 @@ const toSubscriberObject = <T>(subscriber: Subscriber<T>): SubscriberObject<T> =
   resume: bind(subscriber, 'resume'),
 });
 
-export class SubscribeConsumer<T, Link extends BaseLink<T>> implements Consumer {
+export class SubscribeConsumer<T, Link extends BaseLink<T>>
+  implements Consumer, QueueItem<SubscribeConsumer<any, any>>
+{
   private readonly link: Link;
   private subscriber: SubscriberObject<T>;
-  nextInQueue: SubscribeConsumer<any, any> | null = null;
-  prevInQueue: SubscribeConsumer<any, any> | null = null;
+  prev: SubscribeConsumer<any, any> | null = null;
+  next: SubscribeConsumer<any, any> | null = null;
 
   constructor(producer: RawStore<T, Link>, subscriber: Subscriber<T>) {
     this.subscriber = toSubscriberObject(subscriber);

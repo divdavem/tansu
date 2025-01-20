@@ -1,45 +1,10 @@
+import { createQueue } from './linkedQueue';
 import type { SubscribeConsumer } from './subscribeConsumer';
 
-let firstSubscriberInQueue: SubscribeConsumer<any, any> | null = null;
-let lastSubscriberInQueue: SubscribeConsumer<any, any> | null = null;
 let willProcessQueue = false;
+const { add, remove, shift } = createQueue<SubscribeConsumer<any, any>>();
 
-export const removeFromQueue = (consumer: SubscribeConsumer<any, any>): boolean => {
-  const prev = consumer.prevInQueue;
-  const next = consumer.nextInQueue;
-  if (prev || next || firstSubscriberInQueue === consumer) {
-    consumer.prevInQueue = null;
-    consumer.nextInQueue = null;
-    if (prev) {
-      prev.nextInQueue = next;
-    } else {
-      firstSubscriberInQueue = next;
-    }
-    if (next) {
-      next.prevInQueue = prev;
-    } else {
-      lastSubscriberInQueue = prev;
-    }
-    return true;
-  }
-  return false;
-};
-
-export const addToQueue = (consumer: SubscribeConsumer<any, any>): boolean => {
-  if (consumer === lastSubscriberInQueue) {
-    // already the last in the queue, nothing to do !
-    return false;
-  }
-  const existing = removeFromQueue(consumer);
-  consumer.prevInQueue = lastSubscriberInQueue;
-  if (lastSubscriberInQueue) {
-    lastSubscriberInQueue.nextInQueue = consumer;
-  } else {
-    firstSubscriberInQueue = consumer;
-  }
-  lastSubscriberInQueue = consumer;
-  return !existing;
-};
+export { add as addToQueue, remove as removeFromQueue };
 
 /**
  * Batches multiple changes to stores while calling the provided function,
@@ -91,9 +56,8 @@ export const batch = <T>(fn: () => T): T => {
     res = fn();
   } finally {
     if (needsProcessQueue) {
-      while (firstSubscriberInQueue) {
-        const consumer = firstSubscriberInQueue;
-        removeFromQueue(consumer);
+      let consumer = shift();
+      while (consumer) {
         try {
           consumer.notify();
         } catch (e) {
@@ -104,6 +68,7 @@ export const batch = <T>(fn: () => T): T => {
             error = e;
           }
         }
+        consumer = shift();
       }
       willProcessQueue = false;
     }

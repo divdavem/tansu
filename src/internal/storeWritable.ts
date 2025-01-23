@@ -22,7 +22,7 @@ export interface ProducerConsumerLink<T> extends BaseLink<T> {
   producer: RawStore<T, ProducerConsumerLink<T>>;
   prevInProducer: ProducerConsumerLink<T> | null;
   nextInProducer: ProducerConsumerLink<T> | null;
-  consumer: Consumer;
+  consumer: WeakRef<Consumer>;
   skipMarkDirty: boolean;
 }
 
@@ -42,7 +42,7 @@ export class RawStoreWritable<T> implements RawStore<T, ProducerConsumerLink<T>>
       producer: this,
       nextInProducer: null,
       prevInProducer: null,
-      consumer,
+      consumer: new WeakRef(consumer),
       nextInConsumer: null,
       skipMarkDirty: false,
     };
@@ -149,7 +149,15 @@ export class RawStoreWritable<T> implements RawStore<T, ProducerConsumerLink<T>>
       let link = this.consumerFirst;
       while (link) {
         if (!link.skipMarkDirty) {
-          link.consumer.markDirty();
+          const consumer = link.consumer.deref();
+          if (consumer) {
+            consumer.markDirty();
+          } else {
+            const nextLink = link.nextInProducer;
+            this.unregisterConsumer(link);
+            link = nextLink;
+            continue;
+          }
         }
         link = link.nextInProducer;
       }

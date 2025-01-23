@@ -3,7 +3,7 @@ import { Component, Injectable, inject } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { BehaviorSubject, from } from 'rxjs';
 import { writable as svelteWritable } from 'svelte/store';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   OnUseArgument,
   Readable,
@@ -32,7 +32,6 @@ import {
 } from './index';
 import { rawStoreSymbol } from './internal/exposeRawStores';
 import { RawStoreFlags } from './internal/store';
-import { flushUnused } from './internal/storeTrackingUsage';
 import type { RawStoreWritable } from './internal/storeWritable';
 
 const expectCorrectlyCleanedUp = <T>(store: StoreInput<T>) => {
@@ -41,8 +40,6 @@ const expectCorrectlyCleanedUp = <T>(store: StoreInput<T>) => {
   expect(rawStore.consumerLast).toBe(null);
   expect(rawStore.flags & RawStoreFlags.START_USE_CALLED).toBeFalsy();
 };
-
-afterEach(flushUnused);
 
 const customSimpleWritable = <T>(
   value: T

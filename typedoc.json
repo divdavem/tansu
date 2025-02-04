@@ -1,5 +1,5 @@
 {
-  "entryPoints": ["src/index.ts"],
+  "entryPoints": ["src/index.ts", "src/interop.ts"],
   "excludeInternal": true,
   "excludePrivate": true,
   "kindSortOrder": ["Function", "Class"],

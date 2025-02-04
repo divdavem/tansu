@@ -1,7 +1,7 @@
 import { type Flushable, inFlushUnused, planFlush } from './asyncFlush';
 import { RawStoreFlags } from './store';
 import { checkNotInNotificationPhase, RawStoreWritable } from './storeWritable';
-import { activeConsumer, untrack } from './untrack';
+import { untrack } from './untrack';
 
 export abstract class RawStoreTrackingUsage<T> extends RawStoreWritable<T> implements Flushable {
   private extraUsages = 0;
@@ -36,24 +36,21 @@ export abstract class RawStoreTrackingUsage<T> extends RawStoreWritable<T> imple
 
   override get(): T {
     checkNotInNotificationPhase();
-    if (activeConsumer) {
-      return activeConsumer.addProducer(this);
-    } else {
-      this.extraUsages++;
-      try {
-        this.updateValue();
-        // Ignoring coverage for the following lines because, unless there is a bug in tansu (which would have to be fixed!)
-        // there should be no way to trigger this error.
-        /* v8 ignore next 3 */
-        if (this.flags & RawStoreFlags.DIRTY) {
-          throw new Error('assert failed: store still dirty after updating it');
-        }
-        return this.readValue();
-      } finally {
-        const extraUsages = --this.extraUsages;
-        if (extraUsages === 0) {
-          this.checkUnused();
-        }
+    this.extraUsages++;
+    try {
+      this.updateValue();
+      // Ignoring coverage for the following lines because, unless there is a bug in tansu (which would have to be fixed!)
+      // there should be no way to trigger this error.
+      /* v8 ignore next 3 */
+      if (this.flags & RawStoreFlags.DIRTY) {
+        throw new Error('assert failed: store still dirty after updating it');
+      }
+      this.notifyConsumer();
+      return this.readValue();
+    } finally {
+      const extraUsages = --this.extraUsages;
+      if (extraUsages === 0) {
+        this.checkUnused();
       }
     }
   }

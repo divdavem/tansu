@@ -25,9 +25,16 @@
   "main": "./dist/package/index.cjs",
   "module": "./dist/package/index.js",
   "exports": {
-    "types": "./dist/package/index.d.ts",
-    "require": "./dist/package/index.cjs",
-    "default": "./dist/package/index.js"
+    ".": {
+      "types": "./dist/package/index.d.ts",
+      "require": "./dist/package/index.cjs",
+      "default": "./dist/package/index.js"
+    },
+    "./interop": {
+      "types": "./dist/package/interop.d.ts",
+      "require": "./dist/package/interop.cjs",
+      "default": "./dist/package/interop.js"
+    }
   },
   "license": "MIT",
   "repository": {

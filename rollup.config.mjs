@@ -13,14 +13,19 @@ export default defineConfig({
   output: [
     {
       format: 'cjs',
-      file: './dist/package/index.cjs',
+      dir: './dist/package',
+      entryFileNames: '[name].cjs',
     },
     {
       format: 'es',
-      file: './dist/package/index.js',
+      dir: './dist/package',
+      entryFileNames: '[name].js',
     },
   ],
-  input: './src/index.ts',
+  input: {
+    index: './src/index.ts',
+    interop: './src/interop.ts',
+  },
   plugins: [
     typescript(),
     {
@@ -36,9 +41,11 @@ export default defineConfig({
         pkg.typings = removeDistPackage(pkg.typings);
         pkg.main = removeDistPackage(pkg.main);
         pkg.module = removeDistPackage(pkg.module);
-        pkg.exports.types = removeDistPackage(pkg.exports.types);
-        pkg.exports.require = removeDistPackage(pkg.exports.require);
-        pkg.exports.default = removeDistPackage(pkg.exports.default);
+        for (const exportEntry of Object.values(pkg.exports)) {
+          exportEntry.types = removeDistPackage(exportEntry.types);
+          exportEntry.require = removeDistPackage(exportEntry.require);
+          exportEntry.default = removeDistPackage(exportEntry.default);
+        }
         this.emitFile({ type: 'asset', fileName: 'package.json', source: JSON.stringify(pkg) });
         this.emitFile({
           type: 'asset',

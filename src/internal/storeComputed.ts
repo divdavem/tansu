@@ -1,3 +1,4 @@
+import { hasActiveConsumer, setActiveConsumer, type TansuActiveConsumer } from './activeConsumer';
 import type { BaseLink, Consumer, RawStore } from './store';
 import { RawStoreFlags, updateLinkProducerValue } from './store';
 import {
@@ -6,11 +7,10 @@ import {
   RawStoreComputedOrDerived,
 } from './storeComputedOrDerived';
 import { epoch, notificationPhase } from './storeWritable';
-import { activeConsumer, setActiveConsumer, type ActiveConsumer } from './untrack';
 
 export class RawStoreComputed<T>
   extends RawStoreComputedOrDerived<T>
-  implements Consumer, ActiveConsumer
+  implements Consumer, TansuActiveConsumer
 {
   private producerIndex = 0;
   private producerLinks: BaseLink<any>[] = [];
@@ -26,7 +26,11 @@ export class RawStoreComputed<T>
 
   override updateValue(): void {
     const flags = this.flags;
-    if (flags & RawStoreFlags.START_USE_CALLED && this.epoch === epoch) {
+    if (
+      flags & RawStoreFlags.START_USE_CALLED &&
+      !(flags & RawStoreFlags.DIRTY) &&
+      !(flags & RawStoreFlags.COMPUTING)
+    ) {
       return;
     }
     super.updateValue();
@@ -34,19 +38,22 @@ export class RawStoreComputed<T>
   }
 
   override get(): T {
+    // FIXME: better test all cases of this optimization:
+    const flags = this.flags;
     if (
-      !activeConsumer &&
+      !hasActiveConsumer() &&
       !notificationPhase &&
-      this.epoch === epoch &&
-      (!(this.flags & RawStoreFlags.HAS_VISIBLE_ONUSE) ||
-        this.flags & RawStoreFlags.START_USE_CALLED)
+      !(flags & RawStoreFlags.COMPUTING) &&
+      !(flags & RawStoreFlags.DIRTY) &&
+      (flags & RawStoreFlags.START_USE_CALLED ||
+        (this.epoch === epoch && !(flags & RawStoreFlags.HAS_VISIBLE_ONUSE)))
     ) {
       return this.readValue();
     }
     return super.get();
   }
 
-  addProducer<U, L extends BaseLink<U>>(producer: RawStore<U, L>): U {
+  addProducer<U, L extends BaseLink<U>>(producer: RawStore<U, L>): void {
     const producerLinks = this.producerLinks;
     const producerIndex = this.producerIndex;
     let link = producerLinks[producerIndex] as L | undefined;
@@ -62,7 +69,7 @@ export class RawStoreComputed<T>
     if (producer.flags & RawStoreFlags.HAS_VISIBLE_ONUSE) {
       this.flags |= RawStoreFlags.HAS_VISIBLE_ONUSE;
     }
-    return producer.updateLink(link);
+    producer.updateLink(link);
   }
 
   override startUse(): void {
@@ -111,7 +118,7 @@ export class RawStoreComputed<T>
       value = COMPUTED_ERRORED;
       this.error = error;
     } finally {
-      setActiveConsumer(prevActiveConsumer);
+      prevActiveConsumer();
     }
     // Remove unused producers:
     const producerLinks = this.producerLinks;

@@ -1,10 +1,10 @@
+import { beginBatch } from '../interop';
 import type { Subscriber, UnsubscribeFunction, UnsubscribeObject, Updater } from '../types';
-import { batch } from './batch';
+import { tansuProducerAccessed } from './activeConsumer';
 import { equal } from './equal';
 import type { Consumer, RawStore } from './store';
 import { RawStoreFlags } from './store';
 import { SubscribeConsumer } from './subscribeConsumer';
-import { activeConsumer } from './untrack';
 
 export let notificationPhase = false;
 
@@ -64,10 +64,9 @@ export class RawStoreWritable<T> implements RawStore<T, ProducerConsumerLink<T>>
     return res;
   }
 
-  updateLink(link: ProducerConsumerLink<T>): T {
+  updateLink(link: ProducerConsumerLink<T>): void {
     link.value = this.value;
     link.version = this.version;
-    return this.readValue();
   }
 
   registerConsumer(link: ProducerConsumerLink<T>): ProducerConsumerLink<T> {
@@ -115,12 +114,19 @@ export class RawStoreWritable<T> implements RawStore<T, ProducerConsumerLink<T>>
     checkNotInNotificationPhase();
     const same = this.equal(this.value, newValue);
     if (!same) {
-      batch(() => {
+      const endBatch = beginBatch();
+      let queueError;
+      try {
         this.value = newValue;
         this.version++;
         this.equalCache = null;
         this.increaseEpoch();
-      });
+      } finally {
+        queueError = endBatch();
+      }
+      if (queueError) {
+        throw queueError.error;
+      }
     }
   }
 
@@ -145,7 +151,8 @@ export class RawStoreWritable<T> implements RawStore<T, ProducerConsumerLink<T>>
 
   get(): T {
     checkNotInNotificationPhase();
-    return activeConsumer ? activeConsumer.addProducer(this) : this.readValue();
+    tansuProducerAccessed(this);
+    return this.readValue();
   }
 
   readValue(): T {

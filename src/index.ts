@@ -5,6 +5,7 @@
  * @packageDocumentation
  */
 
+import { tansuActiveConsumer, tansuConsumerLibrary } from './internal/activeConsumer';
 import { equal } from './internal/equal';
 import {
   exposeRawStore,
@@ -20,10 +21,12 @@ import {
   RawStoreDerivedStore,
   RawStoreSyncDerived,
 } from './internal/storeDerived';
+import { fromInteropSignal } from './internal/storeFromInteropSignal';
 import { RawStoreWithOnUse } from './internal/storeWithOnUse';
 import { RawStoreWritable } from './internal/storeWritable';
 import { noop } from './internal/subscribeConsumer';
 import { untrack } from './internal/untrack';
+import type { WatchableSignal } from './interop';
 import type {
   AsyncDeriveFn,
   AsyncDeriveOptions,
@@ -50,6 +53,12 @@ export { equal } from './internal/equal';
 export { symbolObservable } from './internal/exposeRawStores';
 export { untrack } from './internal/untrack';
 export type * from './types';
+
+tansuConsumerLibrary.producerAccessed = (producer: WatchableSignal) => {
+  if (tansuActiveConsumer) {
+    tansuActiveConsumer.addProducer(fromInteropSignal(producer));
+  }
+};
 
 /**
  * Returns a wrapper (for the given store) which only exposes the {@link ReadableSignal} interface.

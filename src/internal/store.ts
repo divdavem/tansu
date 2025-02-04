@@ -13,6 +13,8 @@ export const enum RawStoreFlags {
   // the following flags are used in RawStoreComputedOrDerived and derived classes
   COMPUTING = 1 << 3,
   DIRTY = 1 << 4,
+  // used in Watcher
+  START_CALLED = 1 << 5,
 }
 
 export interface BaseLink<T> {
@@ -29,7 +31,8 @@ export interface RawStore<T, Link extends BaseLink<T> = BaseLink<T>>
   unregisterConsumer(link: Link): void;
   updateValue(): void;
   isLinkUpToDate(link: Link): boolean;
-  updateLink(link: Link): T;
+  updateLink(link: Link): void;
+  readValue(): T;
 }
 
 export const updateLinkProducerValue = <T>(link: BaseLink<T>): void => {

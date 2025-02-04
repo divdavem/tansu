@@ -1,10 +1,10 @@
+import { batch, getActiveConsumer, type Signal, type Watcher } from '../interop';
 import type { Subscriber, UnsubscribeFunction, UnsubscribeObject, Updater } from '../types';
-import { batch } from './batch';
 import { equal } from './equal';
 import type { Consumer, RawStore } from './store';
-import { RawStoreFlags } from './store';
+import { RawStoreFlags, rawStoreSymbol } from './store';
 import { SubscribeConsumer } from './subscribeConsumer';
-import { activeConsumer } from './untrack';
+import { watchRawStore } from './watch';
 
 export let notificationPhase = false;
 
@@ -25,12 +25,23 @@ export interface ProducerConsumerLink<T> {
   skipMarkDirty: boolean;
 }
 
+class TansuInteropSignal<T> implements Signal<T> {
+  readonly [rawStoreSymbol]: RawStoreWritable<T>;
+  constructor(rawStore: RawStoreWritable<T>) {
+    this[rawStoreSymbol] = rawStore;
+  }
+  watchSignal(notify: () => void): Watcher<T> {
+    return watchRawStore(this[rawStoreSymbol], notify);
+  }
+}
+
 export class RawStoreWritable<T> implements RawStore<T, ProducerConsumerLink<T>> {
   constructor(protected value: T) {}
   flags = RawStoreFlags.NONE;
   private version = 0;
   equalFn = equal<T>;
   private equalCache: Record<number, boolean> | null = null;
+  private interop: null | TansuInteropSignal<T> = null;
   consumerLinks: ProducerConsumerLink<T>[] = [];
 
   newLink(consumer: Consumer): ProducerConsumerLink<T> {
@@ -64,10 +75,9 @@ export class RawStoreWritable<T> implements RawStore<T, ProducerConsumerLink<T>>
     return res;
   }
 
-  updateLink(link: ProducerConsumerLink<T>): T {
+  updateLink(link: ProducerConsumerLink<T>): void {
     link.value = this.value;
     link.version = this.version;
-    return this.readValue();
   }
 
   registerConsumer(link: ProducerConsumerLink<T>): ProducerConsumerLink<T> {
@@ -143,9 +153,22 @@ export class RawStoreWritable<T> implements RawStore<T, ProducerConsumerLink<T>>
     }
   }
 
+  notifyConsumer(): void {
+    const activeConsumer = getActiveConsumer();
+    if (activeConsumer) {
+      let interop = this.interop;
+      if (!interop) {
+        interop = new TansuInteropSignal(this);
+        this.interop = interop;
+      }
+      activeConsumer?.addProducer(interop);
+    }
+  }
+
   get(): T {
     checkNotInNotificationPhase();
-    return activeConsumer ? activeConsumer.addProducer(this) : this.readValue();
+    this.notifyConsumer();
+    return this.readValue();
   }
 
   readValue(): T {

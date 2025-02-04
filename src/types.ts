@@ -4,6 +4,10 @@ declare global {
   }
 }
 
+import type { Signal as InteropSignal } from './interop';
+export type { InteropSignal };
+export type { Watcher as InteropWatcher } from './interop';
+
 /**
  * A callback invoked when a store value changes. It is called with the latest value of a given store.
  */
@@ -89,7 +93,7 @@ export interface InteropObservable<T> {
 /**
  * Valid types that can be considered as a store.
  */
-export type StoreInput<T> = SubscribableStore<T> | InteropObservable<T>;
+export type StoreInput<T> = SubscribableStore<T> | InteropObservable<T> | InteropSignal<T>;
 
 /**
  * Represents a store that can return its value with a get method.
@@ -106,7 +110,11 @@ export interface SignalStore<T> {
  *
  * For {@link https://rxjs.dev/api/index/interface/InteropObservable | interoperability with rxjs}, it also implements the `[Symbol.observable]` method.
  */
-export interface Readable<T> extends SubscribableStore<T>, InteropObservable<T>, SignalStore<T> {
+export interface Readable<T>
+  extends SubscribableStore<T>,
+    InteropObservable<T>,
+    SignalStore<T>,
+    InteropSignal<T> {
   subscribe(subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject;
   [Symbol.observable](): Readable<T>;
 }

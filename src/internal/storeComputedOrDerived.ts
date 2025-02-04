@@ -1,7 +1,7 @@
+import { setActiveConsumer } from '../interop';
 import type { Consumer } from './store';
 import { RawStoreFlags } from './store';
 import { RawStoreTrackingUsage } from './storeTrackingUsage';
-import { setActiveConsumer } from './untrack';
 
 const MAX_CHANGE_RECOMPUTES = 1000;
 
@@ -54,14 +54,14 @@ export abstract class RawStoreComputedOrDerived<T>
       return;
     }
     this.flags |= RawStoreFlags.COMPUTING;
-    const prevActiveConsumer = setActiveConsumer(null);
+    const prevConsumer = setActiveConsumer(null);
     try {
       let iterations = 0;
       do {
         do {
           iterations++;
           this.flags &= ~RawStoreFlags.DIRTY;
-          if (this.areProducersUpToDate()) {
+          if (this.areProducersUpToDate() && !(this.flags & RawStoreFlags.DIRTY)) {
             return;
           }
         } while (this.flags & RawStoreFlags.DIRTY && iterations < MAX_CHANGE_RECOMPUTES);
@@ -73,7 +73,7 @@ export abstract class RawStoreComputedOrDerived<T>
         this.set(COMPUTED_ERRORED);
       }
     } finally {
-      setActiveConsumer(prevActiveConsumer);
+      setActiveConsumer(prevConsumer);
       this.flags &= ~RawStoreFlags.COMPUTING;
     }
   }

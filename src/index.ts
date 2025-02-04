@@ -6,12 +6,7 @@
  */
 
 import { equal } from './internal/equal';
-import {
-  exposeRawStore,
-  getRawStore,
-  rawStoreSymbol,
-  symbolObservable,
-} from './internal/exposeRawStores';
+import { exposeRawStore, getRawStore, symbolObservable } from './internal/exposeRawStores';
 import { RawStoreComputed } from './internal/storeComputed';
 import { RawStoreConst } from './internal/storeConst';
 import {
@@ -24,6 +19,7 @@ import { RawStoreWithOnUse } from './internal/storeWithOnUse';
 import { RawStoreWritable } from './internal/storeWritable';
 import { noop } from './internal/subscribeConsumer';
 import { untrack } from './internal/untrack';
+import { watchRawStore } from './internal/watch';
 import type {
   AsyncDeriveFn,
   AsyncDeriveOptions,
@@ -44,6 +40,9 @@ import type {
   Writable,
   WritableSignal,
 } from './types';
+
+import { rawStoreSymbol } from './internal/store';
+import { type Watcher } from './interop';
 
 export { batch } from './internal/batch';
 export { equal } from './internal/equal';
@@ -302,6 +301,10 @@ export abstract class Store<T> implements Readable<T> {
 
   [symbolObservable](): this {
     return this;
+  }
+
+  watchSignal(notify: () => void): Watcher<T> {
+    return watchRawStore(this[rawStoreSymbol], notify);
   }
 }
 

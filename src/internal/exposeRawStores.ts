@@ -1,6 +1,9 @@
+import { type Watcher } from '../interop';
 import type { Readable, ReadableSignal, StoreInput } from '../types';
-import type { RawStore } from './store';
+import { rawStoreSymbol, type RawStore } from './store';
+import { RawStoreFromWatch } from './storeFromWatch';
 import { RawSubscribableWrapper } from './storeSubscribable';
+import { watchRawStore } from './watch';
 
 /**
  * Symbol used in {@link InteropObservable} allowing any object to expose an observable.
@@ -12,7 +15,10 @@ const returnThis = function <T>(this: T): T {
   return this;
 };
 
-export const rawStoreSymbol = Symbol();
+const watch = function <T extends StoreInput<T>>(this: T, notify: () => void): Watcher<T> {
+  return watchRawStore(getRawStore(this), notify);
+};
+
 const rawStoreMap = new WeakMap<StoreInput<any>, RawStore<any>>();
 
 export const getRawStore = <T>(storeInput: StoreInput<T>): RawStore<T> => {
@@ -22,11 +28,15 @@ export const getRawStore = <T>(storeInput: StoreInput<T>): RawStore<T> => {
   }
   let res = rawStoreMap.get(storeInput);
   if (!res) {
-    let subscribable = storeInput;
-    if (!('subscribe' in subscribable)) {
-      subscribable = subscribable[symbolObservable]();
+    if ('watchSignal' in storeInput) {
+      res = new RawStoreFromWatch(storeInput);
+    } else {
+      let subscribable = storeInput;
+      if (!('subscribe' in subscribable)) {
+        subscribable = subscribable[symbolObservable]();
+      }
+      res = new RawSubscribableWrapper(subscribable);
     }
-    res = new RawSubscribableWrapper(subscribable);
     rawStoreMap.set(storeInput, res);
   }
   return res;
@@ -43,6 +53,7 @@ export const exposeRawStore = <T, U>(
   get.get = get;
   get.subscribe = rawStore.subscribe.bind(rawStore);
   get[symbolObservable] = returnThis;
+  get.watchSignal = watch;
   get[rawStoreSymbol] = rawStore;
   return get;
 };

@@ -1,3 +1,5 @@
+import { runWithConsumer, hasCurrentConsumer } from '../interop';
+import { getRawStore } from './exposeRawStores';
 import type { BaseLink, Consumer, RawStore } from './store';
 import { RawStoreFlags, updateLinkProducerValue } from './store';
 import {
@@ -6,12 +8,8 @@ import {
   RawStoreComputedOrDerived,
 } from './storeComputedOrDerived';
 import { epoch, notificationPhase } from './storeWritable';
-import { activeConsumer, setActiveConsumer, type ActiveConsumer } from './untrack';
 
-export class RawStoreComputed<T>
-  extends RawStoreComputedOrDerived<T>
-  implements Consumer, ActiveConsumer
-{
+export class RawStoreComputed<T> extends RawStoreComputedOrDerived<T> implements Consumer {
   private producerIndex = 0;
   private producerLinks: BaseLink<any>[] = [];
   private epoch = -1;
@@ -35,7 +33,7 @@ export class RawStoreComputed<T>
 
   override get(): T {
     if (
-      !activeConsumer &&
+      !hasCurrentConsumer() &&
       !notificationPhase &&
       this.epoch === epoch &&
       (!(this.flags & RawStoreFlags.HAS_VISIBLE_ONUSE) ||
@@ -101,19 +99,23 @@ export class RawStoreComputed<T>
 
   override recompute(): void {
     let value: T;
-    const prevActiveConsumer = setActiveConsumer(this);
-    try {
-      this.producerIndex = 0;
-      this.flags &= ~RawStoreFlags.HAS_VISIBLE_ONUSE;
-      const computeFn = this.computeFn;
-      value = computeFn();
-      this.error = null;
-    } catch (error) {
-      value = COMPUTED_ERRORED;
-      this.error = error;
-    } finally {
-      setActiveConsumer(prevActiveConsumer);
-    }
+    runWithConsumer(
+      () => {
+        try {
+          this.producerIndex = 0;
+          this.flags &= ~RawStoreFlags.HAS_VISIBLE_ONUSE;
+          const computeFn = this.computeFn;
+          value = computeFn();
+          this.error = null;
+        } catch (error) {
+          value = COMPUTED_ERRORED;
+          this.error = error;
+        }
+      },
+      (signal) => {
+        this.addProducer(getRawStore(signal));
+      }
+    );
     // Remove unused producers:
     const producerLinks = this.producerLinks;
     const producerIndex = this.producerIndex;
@@ -123,6 +125,6 @@ export class RawStoreComputed<T>
         link.producer.unregisterConsumer(link);
       }
     }
-    this.set(value);
+    this.set(value!);
   }
 }

@@ -1,5 +1,7 @@
 import type { SignalStore, SubscribableStore } from '../types';
 
+export const rawStoreSymbol = Symbol();
+
 export interface Consumer {
   markDirty(): void;
 }

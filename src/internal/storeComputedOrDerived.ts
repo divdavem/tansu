@@ -1,7 +1,7 @@
 import type { Consumer } from './store';
 import { RawStoreFlags } from './store';
 import { RawStoreTrackingUsage } from './storeTrackingUsage';
-import { setActiveConsumer } from './untrack';
+import { untrack } from './untrack';
 
 const MAX_CHANGE_RECOMPUTES = 1000;
 
@@ -54,28 +54,28 @@ export abstract class RawStoreComputedOrDerived<T>
       return;
     }
     this.flags |= RawStoreFlags.COMPUTING;
-    const prevActiveConsumer = setActiveConsumer(null);
-    try {
-      let iterations = 0;
-      do {
+    untrack(() => {
+      try {
+        let iterations = 0;
         do {
-          iterations++;
-          this.flags &= ~RawStoreFlags.DIRTY;
-          if (this.areProducersUpToDate()) {
-            return;
-          }
+          do {
+            iterations++;
+            this.flags &= ~RawStoreFlags.DIRTY;
+            if (this.areProducersUpToDate()) {
+              return;
+            }
+          } while (this.flags & RawStoreFlags.DIRTY && iterations < MAX_CHANGE_RECOMPUTES);
+          this.recompute();
         } while (this.flags & RawStoreFlags.DIRTY && iterations < MAX_CHANGE_RECOMPUTES);
-        this.recompute();
-      } while (this.flags & RawStoreFlags.DIRTY && iterations < MAX_CHANGE_RECOMPUTES);
-      if (this.flags & RawStoreFlags.DIRTY) {
-        this.flags &= ~RawStoreFlags.DIRTY;
-        this.error = new Error('reached maximum number of store changes in one shot');
-        this.set(COMPUTED_ERRORED);
+        if (this.flags & RawStoreFlags.DIRTY) {
+          this.flags &= ~RawStoreFlags.DIRTY;
+          this.error = new Error('reached maximum number of store changes in one shot');
+          this.set(COMPUTED_ERRORED);
+        }
+      } finally {
+        this.flags &= ~RawStoreFlags.COMPUTING;
       }
-    } finally {
-      setActiveConsumer(prevActiveConsumer);
-      this.flags &= ~RawStoreFlags.COMPUTING;
-    }
+    });
   }
 
   abstract areProducersUpToDate(): boolean;

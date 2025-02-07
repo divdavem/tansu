@@ -1,10 +1,11 @@
+import { callCurrentConsumer, type Signal, type Watcher, watchSignal } from '../interop';
 import type { Subscriber, UnsubscribeFunction, UnsubscribeObject, Updater } from '../types';
 import { batch } from './batch';
 import { equal } from './equal';
 import type { Consumer, RawStore } from './store';
-import { RawStoreFlags } from './store';
+import { RawStoreFlags, rawStoreSymbol } from './store';
 import { SubscribeConsumer } from './subscribeConsumer';
-import { activeConsumer } from './untrack';
+import { watchRawStore } from './watch';
 
 export let notificationPhase = false;
 
@@ -25,8 +26,20 @@ export interface ProducerConsumerLink<T> {
   skipMarkDirty: boolean;
 }
 
+interface TansuInteropSignal<T> extends Signal<T> {
+  [rawStoreSymbol]: RawStoreWritable<T>;
+}
+
+const watchThisRawStore = function <T>(
+  this: TansuInteropSignal<T>,
+  notify: () => void
+): Watcher<T> {
+  return watchRawStore(this[rawStoreSymbol], notify);
+};
+
 export class RawStoreWritable<T> implements RawStore<T, ProducerConsumerLink<T>> {
   constructor(protected value: T) {}
+  interop: TansuInteropSignal<T> = { [rawStoreSymbol]: this, [watchSignal]: watchThisRawStore };
   flags = RawStoreFlags.NONE;
   private version = 0;
   equalFn = equal<T>;
@@ -144,7 +157,8 @@ export class RawStoreWritable<T> implements RawStore<T, ProducerConsumerLink<T>>
 
   get(): T {
     checkNotInNotificationPhase();
-    return activeConsumer ? activeConsumer.addProducer(this) : this.readValue();
+    callCurrentConsumer(this.interop);
+    return this.readValue();
   }
 
   readValue(): T {

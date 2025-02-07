@@ -2,7 +2,7 @@ import type { Watcher } from '../interop';
 import { updateLinkProducerValue, type BaseLink, type Consumer, type RawStore } from './store';
 import { noop } from './subscribeConsumer';
 
-export class WatcherConsumer<T, Link extends BaseLink<T>> implements Consumer, Watcher<T> {
+class WatcherConsumer<T, Link extends BaseLink<T>> implements Consumer, Watcher<T> {
   dirty = true;
   link: Link | undefined;
   constructor(
@@ -57,3 +57,15 @@ export class WatcherConsumer<T, Link extends BaseLink<T>> implements Consumer, W
     }
   }
 }
+
+const exposeWatcher = <T>(watcherConsumer: WatcherConsumer<T, BaseLink<T>>): Watcher<T> => ({
+  isUpToDate: watcherConsumer.isUpToDate.bind(watcherConsumer),
+  update: watcherConsumer.update.bind(watcherConsumer),
+  get: watcherConsumer.get.bind(watcherConsumer),
+  destroy: watcherConsumer.destroy.bind(watcherConsumer),
+});
+
+export const watchRawStore = <T>(
+  producer: RawStore<T, BaseLink<T>>,
+  notify: () => void
+): Watcher<T> => exposeWatcher(new WatcherConsumer(producer, notify));

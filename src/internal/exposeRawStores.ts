@@ -1,9 +1,9 @@
-import { type Watcher, watchSignal } from '../interop';
+import { watchSignal, type Watcher } from '../interop';
 import type { Readable, ReadableSignal, StoreInput } from '../types';
-import type { BaseLink, RawStore } from './store';
+import { rawStoreSymbol, type RawStore } from './store';
 import { RawStoreFromWatch } from './storeFromWatch';
 import { RawSubscribableWrapper } from './storeSubscribable';
-import { WatcherConsumer } from './watch';
+import { watchRawStore } from './watch';
 
 /**
  * Symbol used in {@link InteropObservable} allowing any object to expose an observable.
@@ -16,10 +16,9 @@ const returnThis = function <T>(this: T): T {
 };
 
 const watch = function <T extends StoreInput<T>>(this: T, notify: () => void): Watcher<T> {
-  return exposeWatcher(new WatcherConsumer(getRawStore(this), notify));
+  return watchRawStore(getRawStore(this), notify);
 };
 
-export const rawStoreSymbol = Symbol();
 const rawStoreMap = new WeakMap<StoreInput<any>, RawStore<any>>();
 
 export const getRawStore = <T>(storeInput: StoreInput<T>): RawStore<T> => {
@@ -59,10 +58,3 @@ export const exposeRawStore = <T, U>(
   get[rawStoreSymbol] = rawStore;
   return get;
 };
-
-export const exposeWatcher = <T>(watcherConsumer: WatcherConsumer<T, BaseLink<T>>): Watcher<T> => ({
-  isUpToDate: watcherConsumer.isUpToDate.bind(watcherConsumer),
-  update: watcherConsumer.update.bind(watcherConsumer),
-  get: watcherConsumer.get.bind(watcherConsumer),
-  destroy: watcherConsumer.destroy.bind(watcherConsumer),
-});

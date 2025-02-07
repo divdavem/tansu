@@ -4,6 +4,8 @@ declare global {
   }
 }
 
+import type * as SignalInterop from './interop';
+
 /**
  * A callback invoked when a store value changes. It is called with the latest value of a given store.
  */
@@ -89,7 +91,7 @@ export interface InteropObservable<T> {
 /**
  * Valid types that can be considered as a store.
  */
-export type StoreInput<T> = SubscribableStore<T> | InteropObservable<T>;
+export type StoreInput<T> = SubscribableStore<T> | InteropObservable<T> | SignalInterop.Signal<T>;
 
 /**
  * Represents a store that can return its value with a get method.
@@ -106,7 +108,11 @@ export interface SignalStore<T> {
  *
  * For {@link https://rxjs.dev/api/index/interface/InteropObservable | interoperability with rxjs}, it also implements the `[Symbol.observable]` method.
  */
-export interface Readable<T> extends SubscribableStore<T>, InteropObservable<T>, SignalStore<T> {
+export interface Readable<T>
+  extends SubscribableStore<T>,
+    InteropObservable<T>,
+    SignalStore<T>,
+    SignalInterop.Signal<T> {
   subscribe(subscriber: Subscriber<T>): UnsubscribeFunction & UnsubscribeObject;
   [Symbol.observable](): Readable<T>;
 }
@@ -260,36 +266,3 @@ export type AsyncDeriveFn<T, S> = (
 export interface AsyncDeriveOptions<T, S> extends Omit<StoreOptions<T>, 'onUse'> {
   derive: AsyncDeriveFn<T, S>;
 }
-
-/**
- * Watcher interface.
- */
-export interface Watcher<T> {
-  /**
-   * Whether the watcher is dirty (i.e. the {@link Watcher.update|update} method needs to be called before notify can be called).
-   */
-  isUpToDate(): boolean;
-
-  /**
-   * Clears the dirty state and updates the watched store.
-   * @returns true if the value of the watched store changed (since the last call of update) or false if it stayed the same.
-   */
-  update(): boolean;
-
-  /**
-   * Returns the current value of the watched store. Should only be called when the watcher is up-to-date (i.e. after calling {@link Watcher.update|update}).
-   */
-  get(): T;
-
-  /**
-   * Destroys the watcher.
-   *
-   * @remarks
-   *
-   * After a watcher is destroyed it should no longer be used and its notify function will no longer be called.
-   */
-  destroy(): void;
-}
-
-export type InteropWatcher<T> = Omit<Watcher<T>, 'isUpToDate'>;
-export type InteropWatcherFactory<T> = (notify: () => void) => InteropWatcher<T>;

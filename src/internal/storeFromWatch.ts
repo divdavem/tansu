@@ -1,12 +1,12 @@
-import type { InteropWatcher } from '../types';
+import type { Watcher } from '../interop';
 import { RawStoreFlags } from './store';
 import { COMPUTED_ERRORED, RawStoreComputedOrDerived } from './storeComputedOrDerived';
 
 export class RawStoreFromWatch<T> extends RawStoreComputedOrDerived<T> {
   override flags = RawStoreFlags.HAS_VISIBLE_ONUSE | RawStoreFlags.DIRTY;
-  watcher: InteropWatcher<T> | undefined;
+  watcher: Watcher<T> | undefined;
 
-  constructor(private readonly watch: (notify: () => void) => InteropWatcher<T>) {
+  constructor(private readonly watch: (notify: () => void) => Watcher<T>) {
     super(undefined as any);
     this.markDirty = this.markDirty.bind(this);
   }

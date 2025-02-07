@@ -1,4 +1,4 @@
-import type { Watcher } from '../types';
+import type { Watcher } from '../interop';
 import { updateLinkProducerValue, type BaseLink, type Consumer, type RawStore } from './store';
 import { noop } from './subscribeConsumer';
 

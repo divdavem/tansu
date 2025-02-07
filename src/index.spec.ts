@@ -5,8 +5,6 @@ import { BehaviorSubject, from } from 'rxjs';
 import { writable as svelteWritable } from 'svelte/store';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
-  InteropWatcher,
-  InteropWatcherFactory,
   OnUseArgument,
   Readable,
   ReadableSignal,
@@ -26,18 +24,17 @@ import {
   computed,
   derived,
   equal,
-  fromWatch,
   get,
   readable,
   symbolObservable,
   untrack,
-  watch,
   writable,
 } from './index';
 import { rawStoreSymbol } from './internal/exposeRawStores';
 import { RawStoreFlags } from './internal/store';
 import { flushUnused } from './internal/storeTrackingUsage';
 import type { RawStoreWritable } from './internal/storeWritable';
+import { watchSignal, type Watcher } from './interop';
 
 const expectCorrectlyCleanedUp = <T>(store: StoreInput<T>) => {
   const rawStore = (store as any)[rawStoreSymbol] as RawStoreWritable<T>;
@@ -3583,7 +3580,7 @@ describe('stores', () => {
         },
       });
       const notify = vi.fn();
-      const watcher = watch(store, notify);
+      const watcher = store[watchSignal](notify);
       expect(watcher.isUpToDate()).toBe(false);
       expect(onUseCalls.length).toBe(0);
       expect(watcher.update()).toBe(true);
@@ -3624,21 +3621,24 @@ describe('stores', () => {
       let isUpdated = true;
       let value = 0;
       const watcher = {
+        isUpToDate: vi.fn(() => {
+          throw new Error('unexpected call to isUpToDate');
+        }),
         update: vi.fn(() => isUpdated),
         get: vi.fn(() => value),
         destroy: vi.fn(),
-      } satisfies InteropWatcher<number>;
+      } satisfies Watcher<number>;
       const watchFn = vi.fn((notifyFn: () => void) => {
         notify = notifyFn;
         return watcher;
-      }) satisfies InteropWatcherFactory<number>;
+      }) satisfies (notify: () => void) => Watcher<number>;
       const clearMocks = () => {
         watchFn.mockClear();
         watcher.update.mockClear();
         watcher.get.mockClear();
         watcher.destroy.mockClear();
       };
-      const store = fromWatch(watchFn);
+      const store = asReadable({ [watchSignal]: watchFn });
       expect(watchFn).not.toHaveBeenCalled();
       expect(store.get()).toBe(0);
       expect(watchFn).toHaveBeenCalledOnce();
@@ -3704,13 +3704,14 @@ describe('stores', () => {
       expect(watcher.update).not.toHaveBeenCalled();
       expect(watcher.get).not.toHaveBeenCalled();
       expect(watchFn).not.toHaveBeenCalled();
+      expect(watcher.isUpToDate).not.toHaveBeenCalled();
     });
   });
 
   describe('watch / fromWatch', () => {
     it('should work to convert back and forth a basic writable', () => {
       const store = writable(0);
-      const otherStore = fromWatch((notify) => watch(store, notify));
+      const otherStore = asReadable({ [watchSignal]: (notify) => store[watchSignal](notify) });
       expect(otherStore()).toBe(0);
       store.set(1);
       expect(otherStore()).toBe(1);
@@ -3738,7 +3739,9 @@ describe('stores', () => {
     it('should work to convert back and forth a computed', () => {
       const store = writable(0);
       const doubleStore = computed(() => store() * 2);
-      const otherStore = fromWatch((notify) => watch(doubleStore, notify));
+      const otherStore = asReadable({
+        [watchSignal]: (notify) => doubleStore[watchSignal](notify),
+      });
       expect(otherStore()).toBe(0);
       store.set(1);
       expect(otherStore()).toBe(2);

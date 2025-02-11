@@ -325,7 +325,7 @@ for (const config of perfTests) {
     },
     {
       throws: true,
-      time: 5000,
+      time: 300000,
       setup() {
         graphAndCounter = makeGraph(config);
         setup();

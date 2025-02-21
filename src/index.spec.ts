@@ -33,13 +33,7 @@ import {
 import { RawStoreFlags, rawStoreSymbol } from './internal/store';
 import { flushUnused } from './internal/storeTrackingUsage';
 import type { RawStoreWritable } from './internal/storeWritable';
-import {
-  runWithConsumer,
-  type Signal,
-  watchSignal,
-  type Watcher,
-  callCurrentConsumer,
-} from './interop';
+import { runWithConsumer, watchSignal, type Signal, type Watcher } from './interop';
 import * as mySample from './sample';
 
 const expectCorrectlyCleanedUp = <T>(store: StoreInput<T>) => {

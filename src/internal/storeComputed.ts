@@ -24,7 +24,11 @@ export class RawStoreComputed<T> extends RawStoreComputedOrDerived<T> implements
 
   override updateValue(): void {
     const flags = this.flags;
-    if (flags & RawStoreFlags.START_USE_CALLED && this.epoch === epoch) {
+    if (
+      flags & RawStoreFlags.START_USE_CALLED &&
+      !(flags & RawStoreFlags.DIRTY) &&
+      this.epoch === epoch
+    ) {
       return;
     }
     super.updateValue();

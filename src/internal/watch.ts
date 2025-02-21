@@ -26,17 +26,25 @@ class WatcherConsumer<T, Link extends BaseLink<T>> implements Consumer, Watcher<
 
   update(): boolean {
     if (this.dirty) {
-      if (this.started) {
+      const prevStarted = this.started;
+      try {
+        if (!prevStarted) {
+          this.start();
+        }
         this.dirty = false;
+        const link = this.link;
+        const producer = link.producer;
+        updateLinkProducerValue(link);
+        if (producer.isLinkUpToDate(link)) {
+          return false;
+        }
+        producer.updateLink(link);
+        return true;
+      } finally {
+        if (!prevStarted) {
+          this.stop();
+        }
       }
-      const link = this.link;
-      const producer = link.producer;
-      updateLinkProducerValue(link);
-      if (producer.isLinkUpToDate(link)) {
-        return false;
-      }
-      producer.updateLink(link);
-      return true;
     }
     return false;
   }

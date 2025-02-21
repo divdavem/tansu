@@ -3587,6 +3587,7 @@ describe('stores', () => {
       });
       const notify = vi.fn();
       const watcher = store[watchSignal](notify);
+      watcher.start();
       expect(watcher.isUpToDate()).toBe(false);
       expect(onUseCalls.length).toBe(0);
       expect(watcher.update()).toBe(true);
@@ -3616,7 +3617,7 @@ describe('stores', () => {
       expect(watcher.isUpToDate()).toBe(true);
       expect(watcher.update()).toBe(false);
       expect(watcher.get()).toBe(2);
-      watcher.suspend();
+      watcher.stop();
       expect(() => watcher.get()).toThrowError('invalid watcher state');
     });
   });
@@ -3632,7 +3633,8 @@ describe('stores', () => {
         }),
         update: vi.fn(() => isUpdated),
         get: vi.fn(() => value),
-        suspend: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
       } satisfies Watcher<number>;
       const watchFn = vi.fn((notifyFn: () => void) => {
         notify = notifyFn;
@@ -3642,7 +3644,7 @@ describe('stores', () => {
         watchFn.mockClear();
         watcher.update.mockClear();
         watcher.get.mockClear();
-        watcher.suspend.mockClear();
+        watcher.stop.mockClear();
       };
       const store = asReadable({ [watchSignal]: watchFn });
       expect(watchFn).toHaveBeenCalledOnce();
@@ -3650,7 +3652,7 @@ describe('stores', () => {
       expect(watchFn).toHaveBeenCalledOnce();
       expect(watcher.update).toHaveBeenCalledOnce();
       expect(watcher.get).toHaveBeenCalledOnce();
-      expect(watcher.suspend).toHaveBeenCalledOnce();
+      expect(watcher.stop).toHaveBeenCalledOnce();
       clearMocks();
       const values: number[] = [];
       const unsubscribe = store.subscribe((value) => {
@@ -3660,7 +3662,7 @@ describe('stores', () => {
       expect(watcher.update).toHaveBeenCalledOnce();
       expect(watcher.get).toHaveBeenCalledOnce();
       expect(watchFn).not.toHaveBeenCalled();
-      expect(watcher.suspend).not.toHaveBeenCalled();
+      expect(watcher.stop).not.toHaveBeenCalled();
       clearMocks();
       isUpdated = false;
       batch(() => {
@@ -3669,7 +3671,7 @@ describe('stores', () => {
       expect(watcher.update).toHaveBeenCalledOnce();
       expect(watchFn).not.toHaveBeenCalled();
       expect(watcher.get).not.toHaveBeenCalled();
-      expect(watcher.suspend).not.toHaveBeenCalled();
+      expect(watcher.stop).not.toHaveBeenCalled();
       clearMocks();
       expect(values).toEqual([0]);
       isUpdated = true;
@@ -3679,7 +3681,7 @@ describe('stores', () => {
       });
       expect(watcher.update).toHaveBeenCalledOnce();
       expect(watcher.get).toHaveBeenCalledOnce();
-      expect(watcher.suspend).not.toHaveBeenCalled();
+      expect(watcher.stop).not.toHaveBeenCalled();
       expect(watchFn).not.toHaveBeenCalled();
       clearMocks();
       expect(values).toEqual([0, 2]);
@@ -3694,7 +3696,7 @@ describe('stores', () => {
       }).toThrowError('myerror');
       expect(watcher.update).toHaveBeenCalledOnce();
       expect(watcher.get).toHaveBeenCalledOnce();
-      expect(watcher.suspend).not.toHaveBeenCalled();
+      expect(watcher.stop).not.toHaveBeenCalled();
       expect(watchFn).not.toHaveBeenCalled();
       clearMocks();
       expect(() => {
@@ -3703,10 +3705,10 @@ describe('stores', () => {
       expect(values).toEqual([0, 2]);
       expect(watcher.update).not.toHaveBeenCalled();
       expect(watcher.get).not.toHaveBeenCalled();
-      expect(watcher.suspend).not.toHaveBeenCalled();
+      expect(watcher.stop).not.toHaveBeenCalled();
       expect(watchFn).not.toHaveBeenCalled();
       unsubscribe();
-      expect(watcher.suspend).toHaveBeenCalledOnce();
+      expect(watcher.stop).toHaveBeenCalledOnce();
       expect(watcher.update).not.toHaveBeenCalled();
       expect(watcher.get).not.toHaveBeenCalled();
       expect(watchFn).not.toHaveBeenCalled();
@@ -3815,6 +3817,7 @@ describe('stores', () => {
         addProducer: vi.fn(<T>(signal: Signal<T>) => {
           const watcher = signal[watchSignal](notify);
           watchers.push(watcher);
+          watcher.start();
           watcher.update();
         }),
       };
@@ -3838,7 +3841,7 @@ describe('stores', () => {
       expect(myComputed()).toBe(1);
     });
 
-    test.only('should work with a store from another library (live)', () => {
+    test('should work with a store from another library (live)', () => {
       const a = mySample.signal(0);
       const myComputed = computed(() => a.get());
       const values: number[] = [];
@@ -3851,7 +3854,7 @@ describe('stores', () => {
       expect(myComputed()).toBe(0);
       console.log('before a.set(1)');
       a.set(1);
-      expect(values).toEqual([1]);
+      expect(values).toEqual([0, 1]);
       console.log('before myComputed()');
       expect(myComputed()).toBe(1);
     });

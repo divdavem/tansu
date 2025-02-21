@@ -58,7 +58,6 @@ export class RawStoreComputed<T> extends RawStoreComputedOrDerived<T> implements
     }
     producerLinks[producerIndex] = link;
     this.producerIndex = producerIndex + 1;
-    updateLinkProducerValue(link);
     if (producer.flags & RawStoreFlags.HAS_VISIBLE_ONUSE) {
       this.flags |= RawStoreFlags.HAS_VISIBLE_ONUSE;
     }

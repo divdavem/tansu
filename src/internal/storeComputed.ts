@@ -16,7 +16,6 @@ export class RawStoreComputed<T> extends RawStoreComputedOrDerived<T> implements
 
   constructor(private readonly computeFn: () => T) {
     super(COMPUTED_UNSET);
-    this.addProducer = this.addProducer.bind(this);
   }
 
   override increaseEpoch(): void {
@@ -58,6 +57,7 @@ export class RawStoreComputed<T> extends RawStoreComputedOrDerived<T> implements
     }
     producerLinks[producerIndex] = link;
     this.producerIndex = producerIndex + 1;
+    updateLinkProducerValue(link);
     if (producer.flags & RawStoreFlags.HAS_VISIBLE_ONUSE) {
       this.flags |= RawStoreFlags.HAS_VISIBLE_ONUSE;
     }
@@ -99,7 +99,7 @@ export class RawStoreComputed<T> extends RawStoreComputedOrDerived<T> implements
 
   override recompute(): void {
     let value: T;
-    const endRunWithConsumer = startRunWithConsumer(this.addProducer);
+    const endRunWithConsumer = startRunWithConsumer(this);
     try {
       this.producerIndex = 0;
       this.flags &= ~RawStoreFlags.HAS_VISIBLE_ONUSE;

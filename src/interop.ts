@@ -58,7 +58,7 @@ export interface Watcher<T> {
  * A consumer is a function that can register signals as dependencies.
  * @param signal - the signal to register as a dependency.
  */
-export type Consumer = <T>(signal: Signal<T>) => void;
+export type Consumer = {addProducer: <T>(signal: Signal<T>) => void};
 
 let currentConsumer: Consumer | null = null;
 
@@ -66,8 +66,8 @@ let currentConsumer: Consumer | null = null;
  * Call the current consumer to register a signal as a dependency.
  * @param signal - the signal to register as a dependency
  */
-export const callCurrentConsumer: Consumer = (signal) => {
-  currentConsumer?.(signal);
+export const callCurrentConsumer = <T>(signal: Signal<T>): void => {
+  currentConsumer?.addProducer(signal);
 };
 
 /**

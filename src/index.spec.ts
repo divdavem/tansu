@@ -33,7 +33,14 @@ import {
 import { RawStoreFlags, rawStoreSymbol } from './internal/store';
 import { flushUnused } from './internal/storeTrackingUsage';
 import type { RawStoreWritable } from './internal/storeWritable';
-import { runWithConsumer, type Signal, watchSignal, type Watcher } from './interop';
+import {
+  runWithConsumer,
+  type Signal,
+  watchSignal,
+  type Watcher,
+  callCurrentConsumer,
+} from './interop';
+import * as mySample from './sample';
 
 const expectCorrectlyCleanedUp = <T>(store: StoreInput<T>) => {
   const rawStore = (store as any)[rawStoreSymbol] as RawStoreWritable<T>;
@@ -3804,18 +3811,49 @@ describe('stores', () => {
       const a = writable(0);
       const notify = vi.fn();
       const watchers: Watcher<any>[] = [];
-      const consumer = vi.fn(<T>(signal: Signal<T>) => {
-        const watcher = signal[watchSignal](notify);
-        watchers.push(watcher);
-        watcher.update();
-      });
+      const consumer = {
+        addProducer: vi.fn(<T>(signal: Signal<T>) => {
+          const watcher = signal[watchSignal](notify);
+          watchers.push(watcher);
+          watcher.update();
+        }),
+      };
       const computeValue = () => runWithConsumer(() => 2 * a(), consumer);
       expect(computeValue()).toBe(0);
-      expect(consumer).toHaveBeenCalledOnce();
+      expect(consumer.addProducer).toHaveBeenCalledOnce();
       expect(notify).not.toHaveBeenCalled();
       a.set(1);
       expect(notify).toHaveBeenCalledOnce();
       expect(watchers).toHaveLength(1);
+    });
+
+    test('should work with a store from another library', () => {
+      const a = mySample.signal(0);
+      const myComputed = computed(() => a.get());
+      console.log('before myComputed()');
+      expect(myComputed()).toBe(0);
+      console.log('before a.set(1)');
+      a.set(1);
+      console.log('before myComputed()');
+      expect(myComputed()).toBe(1);
+    });
+
+    test.only('should work with a store from another library (live)', () => {
+      const a = mySample.signal(0);
+      const myComputed = computed(() => a.get());
+      const values: number[] = [];
+      console.log('before subscribe()');
+      myComputed.subscribe((value) => {
+        values.push(value);
+      });
+      expect(values).toEqual([0]);
+      console.log('before myComputed()');
+      expect(myComputed()).toBe(0);
+      console.log('before a.set(1)');
+      a.set(1);
+      expect(values).toEqual([1]);
+      console.log('before myComputed()');
+      expect(myComputed()).toBe(1);
     });
   });
 });

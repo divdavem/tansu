@@ -61,7 +61,7 @@ export abstract class RawStoreComputedOrDerived<T>
         do {
           iterations++;
           this.flags &= ~RawStoreFlags.DIRTY;
-          if (this.areProducersUpToDate()) {
+          if (this.areProducersUpToDate() && !(this.flags & RawStoreFlags.DIRTY)) {
             return;
           }
         } while (this.flags & RawStoreFlags.DIRTY && iterations < MAX_CHANGE_RECOMPUTES);

@@ -1,64 +1,22 @@
 export const watchSignal = Symbol('watchSignal');
 
 export interface Signal<T> {
-  /**
-   * Create a new watcher for the signal. The watcher is created suspended.
-   * A suspended watcher is out-of-date. It can be resumed by calling its update function.
-   * Once a watcher is out-of-date, it remains out-of-date until its update function is called.
-   * @param notify - function to call synchronously when the watcher passes from the up-to-date state to the out-of-date state
-   * without the suspend function being called (i.e. one of the transitive dependencies of the signal or the signal itself has changed).
-   * The notify function must not read any signal synchronously. It can schedule an asynchronous task to read signals.
-   * It should not throw any error. If other up-to-date watched signals depend on the value from this watcher, this notify function
-   * should synchronously call their notify function.
-   */
   [watchSignal](notify: () => void): Watcher<T>;
 }
 
-/**
- * A watcher is an object that keeps track of the value of a signal.
- */
 export interface Watcher<T> {
-  /**
-   * Return true if the watcher is up-to-date, false otherwise.
-   */
+  start(): void;
+  stop(): void;
   isUpToDate(): boolean;
-
-  /**
-   * Recompute the value of the signal (if not already up-to-date).
-   *
-   * @remarks
-   *
-   * If the watcher was suspended, it is resumed.
-   * When a watcher is no longer needed (either temporarily or permanently),
-   * it should be suspended with a call to its suspend method to free resources.
-   *
-   * @returns true if the value has changed since the last call of update, false otherwise.
-   */
   update(): boolean;
-
-  /**
-   * Return the current value of the signal, or throw an error if the signal is in an error state.
-   * Also throw an error if the watcher is not up-to-date.
-   */
   get(): T;
-
-  /**
-   * Suspend the watcher.
-   *
-   * @remarks
-   *
-   * While the watcher is suspended, it is out-of-date.
-   * Depending on the implementation, suspending a watcher may do more than just marking it as out-of-date.
-   * For example, it may unregister the watcher from its producer.
-   */
-  suspend(): void;
 }
 
 /**
  * A consumer is a function that can register signals as dependencies.
  * @param signal - the signal to register as a dependency.
  */
-export type Consumer = {addProducer: <T>(signal: Signal<T>) => void};
+export type Consumer = { addProducer: <T>(signal: Signal<T>) => void };
 
 let currentConsumer: Consumer | null = null;
 

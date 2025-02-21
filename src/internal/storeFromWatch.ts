@@ -12,8 +12,8 @@ export class RawStoreFromWatch<T> extends RawStoreComputedOrDerived<T> {
   }
 
   override startUse(): void {
+    this.watcher.start();
     this.flags |= RawStoreFlags.DIRTY;
-    // TODO: something should be registered in the watcher here
   }
 
   override areProducersUpToDate(): boolean {
@@ -33,6 +33,6 @@ export class RawStoreFromWatch<T> extends RawStoreComputedOrDerived<T> {
   }
 
   override endUse(): void {
-    this.watcher.suspend();
+    this.watcher.stop();
   }
 }

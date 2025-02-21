@@ -3,7 +3,7 @@ import { updateLinkProducerValue, type BaseLink, type Consumer, type RawStore } 
 
 class WatcherConsumer<T, Link extends BaseLink<T>> implements Consumer, Watcher<T> {
   private dirty = true;
-  private registered = false;
+  private started = false;
   private link: Link;
   constructor(
     producer: RawStore<T, Link>,
@@ -26,12 +26,10 @@ class WatcherConsumer<T, Link extends BaseLink<T>> implements Consumer, Watcher<
 
   update(): boolean {
     if (this.dirty) {
-      const link = this.link;
-      if (!this.registered) {
-        this.registered = true;
-        link.producer.registerConsumer(link);
+      if (this.started) {
+        this.dirty = false;
       }
-      this.dirty = false;
+      const link = this.link;
       const producer = link.producer;
       updateLinkProducerValue(link);
       if (producer.isLinkUpToDate(link)) {
@@ -50,10 +48,18 @@ class WatcherConsumer<T, Link extends BaseLink<T>> implements Consumer, Watcher<
     return this.link.producer.readValue();
   }
 
-  suspend(): void {
+  start(): void {
+    if (!this.started) {
+      this.started = true;
+      const link = this.link;
+      link.producer.registerConsumer(link);
+    }
+  }
+
+  stop(): void {
     this.dirty = true;
-    if (this.registered) {
-      this.registered = false;
+    if (this.started) {
+      this.started = false;
       const link = this.link;
       link.producer.unregisterConsumer(link);
     }
@@ -64,7 +70,8 @@ const exposeWatcher = <T>(watcherConsumer: WatcherConsumer<T, BaseLink<T>>): Wat
   isUpToDate: watcherConsumer.isUpToDate.bind(watcherConsumer),
   update: watcherConsumer.update.bind(watcherConsumer),
   get: watcherConsumer.get.bind(watcherConsumer),
-  suspend: watcherConsumer.suspend.bind(watcherConsumer),
+  start: watcherConsumer.start.bind(watcherConsumer),
+  stop: watcherConsumer.stop.bind(watcherConsumer),
 });
 
 export const watchRawStore = <T>(

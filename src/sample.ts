@@ -6,9 +6,9 @@ abstract class BaseSignal<T> {
   private _watchers: { notify: () => void; version: number; dirty: boolean }[] = [];
 
   [SignalInterop.watchSignal](notify: () => void): SignalInterop.Watcher<T> {
-    console.log("watchSignal");
+    console.log('watchSignal');
     const object = { notify, version: -1, dirty: true };
-    let registered = false;
+    let started = false;
     const res: SignalInterop.Watcher<T> = {
       isUpToDate: () => !object.dirty,
       get: () => {
@@ -19,13 +19,11 @@ abstract class BaseSignal<T> {
         return this._getValue();
       },
       update: () => {
-        console.trace("update");
+        console.trace('update');
         if (object.dirty) {
-          if (!registered) {
-            this._watchers.push(object);
-            registered = true;
+          if (started) {
+            object.dirty = false;
           }
-          object.dirty = false;
           this._update();
           const changed = this._version !== object.version;
           object.version = this._version;
@@ -33,14 +31,21 @@ abstract class BaseSignal<T> {
         }
         return false;
       },
-      suspend: () => {
-        console.log('suspend');
+      start: () => {
+        console.log('start');
+        if (!started) {
+          this._watchers.push(object);
+          started = true;
+        }
+      },
+      stop: () => {
+        console.log('stop');
         object.dirty = true;
-        if (registered) {
+        if (started) {
           const index = this._watchers.indexOf(object);
           if (index !== -1) {
             this._watchers.splice(index, 1);
-            registered = false;
+            started = false;
           }
         }
       },
@@ -59,7 +64,7 @@ abstract class BaseSignal<T> {
   protected _markWatchersDirty() {
     for (const watcher of this._watchers) {
       if (!watcher.dirty) {
-        console.log("notify");
+        console.log('notify');
         watcher.dirty = true;
         const notify = watcher.notify;
         notify();
@@ -171,7 +176,7 @@ class Computed<T> extends BaseSignal<T> implements SignalInterop.Consumer {
         const depIndex = this._depIndex;
         const dependencies = this._dependencies;
         while (dependencies.length > depIndex) {
-          dependencies.pop()!.watcher.suspend();
+          dependencies.pop()!.watcher.stop();
         }
         error = null;
       } catch (e) {
@@ -205,9 +210,10 @@ export const effect = <T>(fn: () => T): (() => void) => {
       watcher.update();
     }
   };
+  watcher.start();
   watcher.update();
   return () => {
     destroyed = true;
-    watcher.suspend();
+    watcher.stop();
   };
 };

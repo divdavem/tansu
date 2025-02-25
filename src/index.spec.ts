@@ -32,7 +32,7 @@ import {
 } from './index';
 import { rawStoreSymbol } from './internal/exposeRawStores';
 import { RawStoreFlags } from './internal/store';
-import { flushUnused } from './internal/storeTrackingUsage';
+import { flushUnused } from './internal/asyncFlush';
 import type { RawStoreWritable } from './internal/storeWritable';
 
 const expectCorrectlyCleanedUp = <T>(store: StoreInput<T>) => {

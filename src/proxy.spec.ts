@@ -110,23 +110,11 @@ describe('objects', () => {
     unsubscribe();
   });
 
-  it('should work with Object.preventExtensions', () => {
+  it('should fail with Object.preventExtensions', () => {
     const myStore = proxyStore({ value: 1 } as any);
-    Object.preventExtensions(myStore);
-    expect(myStore.value).toBe(1);
-    myStore.value = 2;
-    expect(myStore.value).toBe(2);
-    const c = computed(() => myStore.newProp);
-    expect(c()).toBe(undefined);
     expect(() => {
-      (myStore as any).newProp = 3;
-    }).toThrow('not extensible');
-    expect(myStore.newProp).toBe(undefined);
-    delete myStore.value;
-    expect(myStore.value).toBe(undefined);
-    expect(() => {
-      (myStore as any).value = 3;
-    }).toThrow('not extensible');
+      Object.preventExtensions(myStore);
+    }).toThrow();
   });
 
   it('should have a prototype that cannot be replaced', () => {
@@ -191,5 +179,87 @@ describe('arrays', () => {
   it('should wrap arrays', () => {
     const myStore = proxyStore([{ a: 1 }]);
     expect(Array.isArray(myStore)).toBe(true);
+  });
+
+  it('should not wrap arrays with a custom prototype', () => {
+    class MyCustomArray extends Array {}
+    const myArray = new MyCustomArray();
+    const myStore = proxyStore(myArray);
+    expect(myStore).toBe(myArray);
+  });
+
+  it('should work with push/pop', () => {
+    const a = proxyStore([0, 1]);
+    const length = computed(() => a.length);
+    const lengthValues = [] as number[];
+    const unsubscribeLength = length.subscribe((value) => lengthValues.push(value));
+    const a2 = computed(() => a[2]);
+    const a2Values = [] as number[];
+    const unsubscribeA2 = a2.subscribe((value) => a2Values.push(value));
+    expect(a2Values).toEqual([undefined]);
+    expect(lengthValues).toEqual([2]);
+    a.push(1);
+    expect(a2Values).toEqual([undefined, 1]);
+    expect(lengthValues).toEqual([2, 3]);
+    a.push(2);
+    expect(lengthValues).toEqual([2, 3, 4]);
+    expect(a.pop()).toBe(2);
+    expect(lengthValues).toEqual([2, 3, 4, 3]);
+    expect(a.pop()).toBe(1);
+    expect(lengthValues).toEqual([2, 3, 4, 3, 2]);
+    expect(a2Values).toEqual([undefined, 1, undefined]);
+    unsubscribeLength();
+    unsubscribeA2();
+  });
+
+  it('should work when setting length', () => {
+    const a = proxyStore([0, 1]);
+    const length = computed(() => a.length);
+    const lengthValues = [] as number[];
+    const unsubscribeLength = length.subscribe((value) => lengthValues.push(value));
+    const a2 = computed(() => a[2]);
+    const a2Values = [] as number[];
+    const unsubscribeA2 = a2.subscribe((value) => a2Values.push(value));
+    expect(a2Values).toEqual([undefined]);
+    expect(lengthValues).toEqual([2]);
+    a[2] = 1;
+    expect(a2Values).toEqual([undefined, 1]);
+    expect(lengthValues).toEqual([2, 3]);
+    a.length = 4;
+    expect(lengthValues).toEqual([2, 3, 4]);
+    a.length = 3;
+    expect(lengthValues).toEqual([2, 3, 4, 3]);
+    a.length = 2;
+    expect(lengthValues).toEqual([2, 3, 4, 3, 2]);
+    expect(a2Values).toEqual([undefined, 1, undefined]);
+    unsubscribeLength();
+    unsubscribeA2();
+  });
+
+  it('should fail to delete the length property', () => {
+    const a = proxyStore([0, 1]);
+    expect(() => {
+      delete (a as any).length;
+    }).toThrow();
+  });
+
+  it('should work with Object.keys', () => {
+    const a = proxyStore([2, 3]);
+    const keys = computed(() => Object.keys(a));
+    const keysValues = [] as string[][];
+    const unsubscribeKeys = keys.subscribe((value) => keysValues.push(value));
+    expect(keysValues).toEqual([['0', '1']]);
+    a.unshift(4);
+    expect(keysValues).toHaveLength(2);
+    expect(keysValues[1]).toEqual(['0', '1', '2']);
+    expect(a.pop()).toBe(3);
+    expect(keysValues).toHaveLength(3);
+    expect(keysValues[2]).toEqual(['0', '1']);
+    a.length = 6;
+    expect(keysValues).toHaveLength(3);
+    unsubscribeKeys();
+    delete a[0];
+    a[5] = 9;
+    expect(keys()).toEqual(['1', '5']);
   });
 });
